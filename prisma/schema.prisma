@@ -1,0 +1,53 @@
+// This is your Prisma schema file
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum UserType {
+  SERVICE_PROVIDER
+  TRADER
+  CUSTOMER
+}
+
+model User {
+  id             String        @id @default(uuid())
+  phoneNumber    String        @unique
+  hashedPassword String
+  hashedOtp      String?
+  otpExpiry      DateTime?
+  refreshToken   String?
+  isVerified     Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+  profiles       UserProfile[]
+
+  @@index([phoneNumber])
+}
+
+model UserProfile {
+  id        String   @id @default(uuid())
+  userId    String
+  firstName String
+  lastName  String
+  gender    Gender
+  type      UserType
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, type])
+  @@index([userId])
+  @@index([type])
+}
