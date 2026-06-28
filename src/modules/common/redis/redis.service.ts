@@ -38,12 +38,16 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
    * unavailable (useful for testing and delayed startup).
    */
   onModuleInit(): void {
-    this.client = new Redis({
-      host: this.configService.get<string>('redis.host'),
-      port: this.configService.get<number>('redis.port'),
-      password: this.configService.get<string>('redis.password') || undefined,
-      lazyConnect: true,
-    });
+    const redisUrl = this.configService.get<string>('redis.url');
+
+    this.client = redisUrl
+      ? new Redis(redisUrl, { lazyConnect: true })
+      : new Redis({
+          host: this.configService.get<string>('redis.host'),
+          port: this.configService.get<number>('redis.port'),
+          password: this.configService.get<string>('redis.password') || undefined,
+          lazyConnect: true,
+        });
 
     this.client.on('connect', () =>
       this.logger.log('Redis connection established'),

@@ -18,6 +18,8 @@ export const validationSchema = Joi.object({
   JWT_REFRESH_EXPIRY: Joi.number().default(604800),
 
   // ── Redis ─────────────────────────────────────────────────────────────────
+  /** Full Redis connection URL — takes priority over individual host/port/password vars */
+  REDIS_URL: Joi.string().optional(),
   REDIS_HOST: Joi.string().default('localhost'),
   REDIS_PORT: Joi.number().default(6379),
   REDIS_PASSWORD: Joi.string().allow('').optional(),
