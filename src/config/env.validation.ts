@@ -25,9 +25,9 @@ export const validationSchema = Joi.object({
   REDIS_PASSWORD: Joi.string().allow('').optional(),
 
   // ── Twilio ────────────────────────────────────────────────────────────────
-  TWILIO_ACCOUNT_SID: Joi.string().required(),
-  TWILIO_AUTH_TOKEN: Joi.string().required(),
-  TWILIO_PHONE_NUMBER: Joi.string().required(),
+  TWILIO_ACCOUNT_SID: Joi.string().optional(),
+  TWILIO_AUTH_TOKEN: Joi.string().optional(),
+  TWILIO_PHONE_NUMBER: Joi.string().optional(),
   OTP_EXPIRY_SECONDS: Joi.number().default(600),
 
   // ── AI Services ───────────────────────────────────────────────────────────

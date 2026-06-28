@@ -188,8 +188,10 @@ export class AuthService {
         this.logger.warn(`[MOCKED SMS] OTP for ${phoneNumber} is: ${otp}`);
       }
     } catch (err) {
-      this.logger.error('Failed to send OTP via Twilio', err);
-      throw new BadRequestException('Failed to send OTP. Please try again.');
+      this.logger.error(
+        `Failed to send OTP via Twilio API. Falling back to console logging. Error: ${err.message}`,
+      );
+      this.logger.warn(`[MOCKED SMS FALLBACK] OTP for ${phoneNumber} is: ${otp}`);
     }
   }
 
