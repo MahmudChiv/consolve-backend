@@ -27,4 +27,10 @@ export const validationSchema = Joi.object({
   TWILIO_AUTH_TOKEN: Joi.string().required(),
   TWILIO_PHONE_NUMBER: Joi.string().required(),
   OTP_EXPIRY_SECONDS: Joi.number().default(600),
+
+  // ── AI Services ───────────────────────────────────────────────────────────
+  GEMINI_API_KEY: Joi.string().required(),
+  DEEPGRAM_API_KEY: Joi.string().required(),
+  ELEVENLABS_API_KEY: Joi.string().required(),
+  ELEVENLABS_VOICE_ID: Joi.string().required(),
 });

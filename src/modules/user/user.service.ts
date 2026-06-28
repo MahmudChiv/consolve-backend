@@ -67,7 +67,7 @@ export class UserService {
       );
     }
 
-    const { firstName, lastName, gender, types } = dto;
+    const { firstName, lastName, gender, types, avatarUrl } = dto;
     const createdProfiles: UserProfile[] = [];
 
     for (const type of types) {
@@ -94,6 +94,7 @@ export class UserService {
           lastName,
           gender,
           type,
+          ...(avatarUrl && { avatarUrl }),
         },
       });
 

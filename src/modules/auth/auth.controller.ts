@@ -23,6 +23,7 @@ import {
   ForbiddenException,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   Req,
   Res,
@@ -43,6 +44,9 @@ import { TokenBlacklistGuard } from '../common/guards/token-blacklist.guard';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @ApiTags('Auth')
 @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 req/min per IP
@@ -187,5 +191,105 @@ export class AuthController {
     if (!userId) throw new ForbiddenException('Cannot identify user');
 
     return this.authService.refresh(userId, refreshToken, oldAccessToken, res);
+  }
+
+  /**
+   * POST /auth/login
+   *
+   * Public endpoint. Validates credentials, generates OTP, sends it,
+   * and sets a temporary access token cookie to authenticate the subsequent /verifyOtp.
+   */
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Login with phone number and password',
+    description:
+      'Validates credentials, sends a 6-digit OTP via SMS, and issues a temporary access token cookie.',
+  })
+  @ApiResponse({ status: 200, description: 'OTP sent successfully' })
+  @ApiResponse({ status: 401, description: 'Invalid phone number or password' })
+  async login(
+    @Body() dto: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.authService.login(dto, res);
+  }
+
+  /**
+   * POST /auth/logout
+   *
+   * Protected endpoint. Revokes the access token (blacklists it in Redis),
+   * clears the refresh token in DB, and clears all cookies.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, TokenBlacklistGuard)
+  @ApiCookieAuth('access_token')
+  @ApiOperation({
+    summary: 'Logout user and revoke tokens',
+    description:
+      'Blacklists the current access token, clears the refresh token, and deletes auth cookies.',
+  })
+  @ApiResponse({ status: 200, description: 'Logged out successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async logout(
+    @CurrentUser() user: JwtPayload,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const accessToken: string | undefined = req.cookies?.['access_token'];
+    return this.authService.logout(user.sub, accessToken, res);
+  }
+
+  /**
+   * POST /auth/forgotPassword
+   *
+   * Public endpoint. Initiates password reset by sending an OTP
+   * and setting a temporary access token cookie.
+   */
+  @Post('forgotPassword')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Initiate password reset',
+    description:
+      'Sends a 6-digit OTP to the phone number and sets a temporary access token cookie on success.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'If an account exists, OTP has been sent.',
+  })
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.authService.forgotPassword(dto, res);
+  }
+
+  /**
+   * PATCH /auth/resetPassword
+   *
+   * Protected endpoint (requires the temporary access token from forgotPassword).
+   * Verifies the OTP, hashes/updates the user password, and clears cookies.
+   */
+  @Patch('resetPassword')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, TokenBlacklistGuard)
+  @ApiCookieAuth('access_token')
+  @ApiOperation({
+    summary: 'Verify OTP and reset password',
+    description:
+      'Verifies OTP, updates password, blacklists the temporary access token, and clears auth cookies.',
+  })
+  @ApiResponse({ status: 200, description: 'Password reset successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid or expired OTP' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @CurrentUser() user: JwtPayload,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const oldToken: string | undefined = req.cookies?.['access_token'];
+    return this.authService.resetPassword(user.sub, dto, oldToken, res);
   }
 }

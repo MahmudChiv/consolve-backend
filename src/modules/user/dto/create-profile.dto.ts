@@ -1,7 +1,7 @@
 /**
- * update-profile.dto.ts
+ * create-profile.dto.ts
  *
- * Data Transfer Object for POST /user/updateProfile.
+ * Data Transfer Object for POST /user/profile.
  *
  * The `types` field is an array, enabling multi-profile creation in a single
  * request. For example, a user who is both a CUSTOMER and a SERVICE_PROVIDER
@@ -12,14 +12,16 @@
  * All fields are validated by class-validator via the global ValidationPipe.
  * Invalid requests are rejected with HTTP 400 before reaching the service.
  */
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserType, Gender } from '@prisma/client';
 import {
   ArrayMinSize,
   ArrayUnique,
   IsArray,
   IsEnum,
+  IsOptional,
   IsString,
+  IsUrl,
   MinLength,
 } from 'class-validator';
 
@@ -57,8 +59,16 @@ export class CreateProfileDto {
     example: [UserType.CUSTOMER, UserType.SERVICE_PROVIDER],
   })
   @IsArray()
-  @ArrayMinSize(1)          // At least one type must be selected
-  @ArrayUnique()            // Prevent duplicate types in the request
-  @IsEnum(UserType, { each: true }) // Each element must be a valid UserType enum value
+  @ArrayMinSize(1)
+  @ArrayUnique()
+  @IsEnum(UserType, { each: true })
   types: UserType[];
+
+  @ApiPropertyOptional({
+    description: 'Public URL to the user\'s profile photo',
+    example: 'https://cdn.example.com/avatars/johndoe.jpg',
+  })
+  @IsOptional()
+  @IsUrl()
+  avatarUrl?: string;
 }
