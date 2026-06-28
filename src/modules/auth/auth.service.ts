@@ -59,7 +59,7 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
   /** Twilio REST client — initialised once at service construction */
-  private readonly twilioClient: Twilio;
+  private readonly twilioClient: Twilio | null;
 
   constructor(
     private readonly prismaService: PrismaService,
@@ -70,11 +70,17 @@ export class AuthService {
     // Build the Twilio client from env-sourced credentials.
     // Using require() ensures jest.mock('twilio') works correctly in tests.
     // The twilio package exports a function directly as module.exports.
-    const twilioClient = twilio(
-      this.configService.get<string>('twilio.accountSid'),
-      this.configService.get<string>('twilio.authToken'),
-    );
-    this.twilioClient = twilioClient;
+    const accountSid = this.configService.get<string>('twilio.accountSid');
+    const authToken = this.configService.get<string>('twilio.authToken');
+
+    if (accountSid && accountSid.startsWith('AC') && authToken) {
+      this.twilioClient = twilio(accountSid, authToken);
+    } else {
+      this.logger.warn(
+        'Twilio credentials are not set or are invalid (accountSid must start with "AC"). SMS OTP delivery will be mocked/logged to console.',
+      );
+      this.twilioClient = null;
+    }
   }
 
   // ─── Private Helpers ────────────────────────────────────────────────────────
@@ -171,12 +177,16 @@ export class AuthService {
    */
   private async sendOtp(phoneNumber: string, otp: string): Promise<void> {
     try {
-      await this.twilioClient.messages.create({
-        body: `Your Consolve verification code is: ${otp}. It expires in 10 minutes.`,
-        from: this.configService.get<string>('twilio.phoneNumber'),
-        to: phoneNumber,
-      });
-      this.logger.log(`OTP sent to ${phoneNumber}`);
+      if (this.twilioClient) {
+        await this.twilioClient.messages.create({
+          body: `Your Consolve verification code is: ${otp}. It expires in 10 minutes.`,
+          from: this.configService.get<string>('twilio.phoneNumber'),
+          to: phoneNumber,
+        });
+        this.logger.log(`OTP sent to ${phoneNumber}`);
+      } else {
+        this.logger.warn(`[MOCKED SMS] OTP for ${phoneNumber} is: ${otp}`);
+      }
     } catch (err) {
       this.logger.error('Failed to send OTP via Twilio', err);
       throw new BadRequestException('Failed to send OTP. Please try again.');

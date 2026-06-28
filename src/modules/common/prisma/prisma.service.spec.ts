@@ -1,14 +1,32 @@
 /**
  * prisma.service.spec.ts
  *
- * Unit tests for PrismaService lifecycle methods (Prisma v5).
+ * Unit tests for PrismaService lifecycle methods (Prisma v7).
  *
- * We mock @prisma/client at the module level so no real DB connection
- * is opened. PrismaService is then instantiated directly (bypassing
- * NestJS DI) to verify $connect and $disconnect are called correctly.
+ * We mock @prisma/client, pg, and @prisma/adapter-pg at the module level
+ * so no real DB connection or pool is opened. PrismaService is then
+ * instantiated directly to verify lifecycle events are handled correctly.
  */
 
-// ── Mock @prisma/client — no real DB calls ────────────────────────────────────
+const mockPoolEnd = jest.fn().mockResolvedValue(undefined);
+
+// Mock pg module
+jest.mock('pg', () => {
+  return {
+    Pool: jest.fn().mockImplementation(function () {
+      this.end = mockPoolEnd;
+    }),
+  };
+});
+
+// Mock @prisma/adapter-pg module
+jest.mock('@prisma/adapter-pg', () => {
+  return {
+    PrismaPg: jest.fn(),
+  };
+});
+
+// Mock @prisma/client — no real DB calls
 jest.mock('@prisma/client', () => {
   return {
     PrismaClient: jest.fn().mockImplementation(function () {
@@ -38,8 +56,9 @@ describe('PrismaService', () => {
     expect((service as any).$connect).toHaveBeenCalledTimes(1);
   });
 
-  it('should call $disconnect on module destroy', async () => {
+  it('should call $disconnect and close pool on module destroy', async () => {
     await service.onModuleDestroy();
     expect((service as any).$disconnect).toHaveBeenCalledTimes(1);
+    expect(mockPoolEnd).toHaveBeenCalledTimes(1);
   });
 });
