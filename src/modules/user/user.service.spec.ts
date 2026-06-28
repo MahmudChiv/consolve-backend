@@ -18,7 +18,7 @@ const mockPrisma = {
 
 const makeUser = (overrides = {}) => ({
   id: 'user-uuid',
-  phoneNumber: '+2348000000001',
+  email: 'test@consolve.dev',
   hashedPassword: 'hashed_pw',
   isVerified: true,
   refreshToken: null,

@@ -65,7 +65,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
    *  2. DB user lookup  — rejects tokens for soft-deleted accounts
    *
    * @param req     The raw Express request (needed to read the cookie)
-   * @param payload The decoded JWT payload (sub, phoneNumber, iat, exp)
+   * @param payload The decoded JWT payload (sub, email, iat, exp)
    * @returns       The payload, which Passport attaches to request.user
    */
   async validate(req: Request, payload: JwtPayload): Promise<JwtPayload> {

@@ -57,21 +57,21 @@ export class AuthController {
   /**
    * POST /auth/register
    *
-   * Public endpoint (no JWT guard). The user provides their phone number
+   * Public endpoint (no JWT guard). The user provides their email
    * and a strong password. On success:
-   *  - A 6-digit OTP is sent to the phone via Twilio
+   *  - A 6-digit OTP is sent to the email via Nodemailer
    *  - An access token is set in the `access_token` httpOnly cookie
    *    (used to authenticate the subsequent /verifyOtp call)
    */
   @Post('register')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Register with phone number and password',
+    summary: 'Register with email and password',
     description:
-      'Creates a new user account, sends a 6-digit OTP via SMS, and issues an access token cookie.',
+      'Creates a new user account, sends a 6-digit OTP via email, and issues an access token cookie.',
   })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
-  @ApiResponse({ status: 409, description: 'Phone number already registered' })
+  @ApiResponse({ status: 409, description: 'Email already registered' })
   @ApiResponse({ status: 429, description: 'Too many requests' })
   async register(
     @Body() dto: RegisterDto,
@@ -118,7 +118,7 @@ export class AuthController {
    * POST /auth/resendOtp
    *
    * Protected endpoint — the client must have the access token cookie from /register.
-   * Generates a new OTP (invalidating the previous one) and sends it via SMS.
+   * Generates a new OTP (invalidating the previous one) and sends it via email.
    * Does not change the access token.
    */
   @Post('resendOtp')
@@ -127,7 +127,7 @@ export class AuthController {
   @ApiCookieAuth('access_token')
   @ApiOperation({
     summary: 'Resend OTP',
-    description: "Generates a new OTP and sends it to the user's phone number.",
+    description: "Generates a new OTP and sends it to the user's email address.",
   })
   @ApiResponse({ status: 200, description: 'OTP resent' })
   @ApiResponse({ status: 400, description: 'Account already verified' })
@@ -196,18 +196,17 @@ export class AuthController {
   /**
    * POST /auth/login
    *
-   * Public endpoint. Validates credentials, generates OTP, sends it,
-   * and sets a temporary access token cookie to authenticate the subsequent /verifyOtp.
+   * Public endpoint. Validates credentials, and directly issues full auth tokens.
    */
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Login with phone number and password',
+    summary: 'Login with email and password',
     description:
-      'Validates credentials, sends a 6-digit OTP via SMS, and issues a temporary access token cookie.',
+      'Validates credentials and directly issues authentication cookies.',
   })
-  @ApiResponse({ status: 200, description: 'OTP sent successfully' })
-  @ApiResponse({ status: 401, description: 'Invalid phone number or password' })
+  @ApiResponse({ status: 200, description: 'Login successful' })
+  @ApiResponse({ status: 401, description: 'Invalid email or password' })
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
@@ -252,7 +251,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Initiate password reset',
     description:
-      'Sends a 6-digit OTP to the phone number and sets a temporary access token cookie on success.',
+      'Sends a 6-digit OTP to the email address and sets a temporary access token cookie on success.',
   })
   @ApiResponse({
     status: 200,

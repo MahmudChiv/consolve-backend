@@ -6,6 +6,7 @@ import configuration from './config/configuration';
 import { validationSchema } from './config/env.validation';
 import { PrismaModule } from './modules/common/prisma/prisma.module';
 import { RedisModule } from './modules/common/redis/redis.module';
+import { MailModule } from './modules/common/mail/mail.module';
 import { RequestLoggerMiddleware } from './modules/common/logger/request-logger.middleware';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
@@ -28,6 +29,7 @@ import { BookingModule } from './modules/booking/booking.module';
     TerminusModule,
     PrismaModule,
     RedisModule,
+    MailModule,
     AuthModule,
     UserModule,
     HealthModule,

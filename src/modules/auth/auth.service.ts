@@ -4,13 +4,13 @@
  * Core authentication business logic.
  *
  * Responsibilities:
- *  - register()      Create account, send OTP via Twilio, issue access token cookie
- *  - login()         Validate credentials, send OTP, issue access token cookie
+ *  - register()      Create account, send email OTP (mocked to console), issue access token cookie
+ *  - login()         Validate email + password, directly issue full auth tokens (no OTP required)
  *  - verifyOtp()     Validate OTP, mark account verified, rotate tokens
  *  - resendOtp()     Generate and send a fresh OTP for unverified accounts
  *  - logout()        Revoke and blacklist tokens, clear cookies
  *  - refresh()       Validate refresh token, rotate both tokens
- *  - forgotPassword()  Send OTP for password reset
+ *  - forgotPassword()  Send email OTP for password reset
  *  - resetPassword()   Verify OTP and set new password
  *  - cleanupExpiredUnverifiedUsers() — cron job: soft-delete stale accounts
  *
@@ -40,10 +40,9 @@ import { JwtService } from '@nestjs/jwt';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
-import twilio from 'twilio';
-import type { Twilio } from 'twilio';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
+import { MailService } from '../common/mail/mail.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
@@ -58,30 +57,13 @@ const BCRYPT_ROUNDS = 12;
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
-  /** Twilio REST client — initialised once at service construction */
-  private readonly twilioClient: Twilio | null;
-
   constructor(
     private readonly prismaService: PrismaService,
     private readonly redisService: RedisService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-  ) {
-    // Build the Twilio client from env-sourced credentials.
-    // Using require() ensures jest.mock('twilio') works correctly in tests.
-    // The twilio package exports a function directly as module.exports.
-    const accountSid = this.configService.get<string>('twilio.accountSid');
-    const authToken = this.configService.get<string>('twilio.authToken');
-
-    if (accountSid && accountSid.startsWith('AC') && authToken) {
-      this.twilioClient = twilio(accountSid, authToken);
-    } else {
-      this.logger.warn(
-        'Twilio credentials are not set or are invalid (accountSid must start with "AC"). SMS OTP delivery will be mocked/logged to console.',
-      );
-      this.twilioClient = null;
-    }
-  }
+    private readonly mailService: MailService,
+  ) {}
 
   // ─── Private Helpers ────────────────────────────────────────────────────────
 
@@ -107,13 +89,13 @@ export class AuthService {
    * Sign a short-lived JWT access token.
    *
    * Payload includes:
-   *  - sub          : user UUID (standard JWT "subject" claim)
-   *  - phoneNumber  : convenience claim — lets controllers identify the user
-   *                   without a DB round-trip
+   *  - sub   : user UUID (standard JWT "subject" claim)
+   *  - email : convenience claim — lets controllers identify the user
+   *            without a DB round-trip
    */
-  private signAccessToken(userId: string, phoneNumber: string): string {
+  private signAccessToken(userId: string, email: string): string {
     return this.jwtService.sign(
-      { sub: userId, phoneNumber },
+      { sub: userId, email },
       {
         secret: this.configService.get<string>('jwt.accessSecret'),
         expiresIn: this.configService.get<number>('jwt.accessExpiry') ?? 900,
@@ -171,28 +153,11 @@ export class AuthService {
   }
 
   /**
-   * Send a one-time passcode via Twilio SMS.
-   * Throws BadRequestException (not a 5xx) so the client receives a
-   * meaningful error rather than a generic server error.
+   * Send a one-time passcode via email using Nodemailer.
+   * Falls back to console output if SMTP is not configured (development/CI).
    */
-  private async sendOtp(phoneNumber: string, otp: string): Promise<void> {
-    try {
-      if (this.twilioClient) {
-        await this.twilioClient.messages.create({
-          body: `Your Consolve verification code is: ${otp}. It expires in 10 minutes.`,
-          from: this.configService.get<string>('twilio.phoneNumber'),
-          to: phoneNumber,
-        });
-        this.logger.log(`OTP sent to ${phoneNumber}`);
-      } else {
-        this.logger.warn(`[MOCKED SMS] OTP for ${phoneNumber} is: ${otp}`);
-      }
-    } catch (err) {
-      this.logger.error(
-        `Failed to send OTP via Twilio API. Falling back to console logging. Error: ${err.message}`,
-      );
-      this.logger.warn(`[MOCKED SMS FALLBACK] OTP for ${phoneNumber} is: ${otp}`);
-    }
+  private async sendEmailOtp(email: string, otp: string): Promise<void> {
+    await this.mailService.sendOtp(email, otp);
   }
 
   /**
@@ -227,30 +192,29 @@ export class AuthService {
    * POST /auth/register
    *
    * Flow:
-   *  1. Check if the phone number is already taken
+   *  1. Check if the email is already taken
    *     - If yes and account is active → ConflictException
    *     - If yes and soft-deleted → restore the account (allow re-registration)
    *  2. Hash the password with bcrypt
    *  3. Generate a 6-digit OTP, hash it, set expiry to now + 10 min
    *  4. Upsert the User record in the DB
-   *  5. Send the plaintext OTP via Twilio (DB only stores the hash)
+   *  5. Log the plaintext OTP to the console (DB only stores the hash)
    *  6. Sign an access JWT, cache it in Redis, set the cookie
    */
   async register(dto: RegisterDto, res: Response): Promise<{ message: string }> {
-    const { phoneNumber, password } = dto;
+    const { email, password } = dto;
 
-    // Check for existing account with this phone number
+    // Check for existing account with this email
     const existing = await this.prismaService.user.findUnique({
-      where: { phoneNumber },
+      where: { email },
     });
 
     if (existing) {
       if (!existing.deletedAt) {
-        // Active account — phone number is taken
-        throw new ConflictException('Phone number already registered');
+        // Active account — email is taken
+        throw new ConflictException('Email already registered');
       }
       // Soft-deleted account — clear the deletedAt flag to restore it
-      // (the upsert below will then update all fields)
       await this.prismaService.user.update({
         where: { id: existing.id },
         data: { deletedAt: null },
@@ -260,14 +224,14 @@ export class AuthService {
     // Hash password (12 rounds per OWASP recommendation)
     const hashedPassword = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
-    // Generate and hash OTP — the plaintext is sent via SMS, the hash is stored
+    // Generate and hash OTP — the plaintext is logged to console, the hash is stored
     const otp = this.generateOtp();
     const hashedOtp = await bcrypt.hash(otp, BCRYPT_ROUNDS);
     const otpExpiry = this.getOtpExpiry();
 
     // Upsert: create on first registration, update on resend after soft-delete restore
     const user = await this.prismaService.user.upsert({
-      where: { phoneNumber },
+      where: { email },
       update: {
         hashedPassword,
         hashedOtp,
@@ -277,29 +241,25 @@ export class AuthService {
         refreshToken: null,
       },
       create: {
-        phoneNumber,
+        email,
         hashedPassword,
         hashedOtp,
         otpExpiry,
       },
     });
 
-    // Send the plaintext OTP — must happen before setting the cookie so the
-    // client receives a meaningful error if Twilio fails
-    await this.sendOtp(phoneNumber, otp);
+    // Log the plaintext OTP to the server console
+    await this.sendEmailOtp(email, otp);
 
     // Issue an access token so the client can hit /verifyOtp and /resendOtp
-    const accessToken = this.signAccessToken(user.id, user.phoneNumber);
+    const accessToken = this.signAccessToken(user.id, user.email);
     const accessExpiry =
       this.configService.get<number>('jwt.accessExpiry') ?? 900;
 
-    // Cache the access token in Redis for fast identity resolution on subsequent requests
     await this.redisService.cacheAccessToken(user.id, accessToken, accessExpiry);
-
-    // Write the token to the httpOnly cookie — never exposed to JavaScript
     this.setAccessCookie(res, accessToken);
 
-    return { message: 'OTP sent to your phone number' };
+    return { message: 'OTP sent to your email address' };
   }
 
   // ─── Verify OTP ─────────────────────────────────────────────────────────────
@@ -353,9 +313,9 @@ export class AuthService {
     // Revoke the pre-verification access token before issuing the full-access one
     await this.blacklistOldAccessToken(userId, oldToken);
 
-    await this.issueFullAuthTokens(user.id, user.phoneNumber, res);
+    await this.issueFullAuthTokens(user.id, user.email, res);
 
-    return { message: 'Phone number verified successfully' };
+    return { message: 'Email verified successfully' };
   }
 
   /**
@@ -363,10 +323,10 @@ export class AuthService {
    */
   private async issueFullAuthTokens(
     userId: string,
-    phoneNumber: string,
+    email: string,
     res: Response,
   ): Promise<void> {
-    const newAccessToken = this.signAccessToken(userId, phoneNumber);
+    const newAccessToken = this.signAccessToken(userId, email);
     const refreshToken = randomBytes(40).toString('hex');
     const hashedRefreshToken = await bcrypt.hash(refreshToken, BCRYPT_ROUNDS);
 
@@ -394,7 +354,7 @@ export class AuthService {
    * POST /auth/resendOtp
    *
    * Only valid for accounts that exist but are not yet verified.
-   * Generates a fresh OTP, replaces the old hash in the DB, and sends via Twilio.
+   * Generates a fresh OTP, replaces the old hash in the DB, and logs to console.
    * The access token (and its cookie) are not changed here — the client already
    * has a valid token from the register step.
    */
@@ -420,9 +380,9 @@ export class AuthService {
       data: { hashedOtp, otpExpiry },
     });
 
-    await this.sendOtp(user.phoneNumber, otp);
+    await this.sendEmailOtp(user.email, otp);
 
-    return { message: 'OTP resent to your phone number' };
+    return { message: 'OTP resent to your email address' };
   }
 
   // ─── Refresh Tokens ─────────────────────────────────────────────────────────
@@ -474,7 +434,7 @@ export class AuthService {
     await this.blacklistOldAccessToken(userId, oldAccessToken);
 
     // Rotate both tokens
-    const newAccessToken = this.signAccessToken(user.id, user.phoneNumber);
+    const newAccessToken = this.signAccessToken(user.id, user.email);
     const newRefreshToken = randomBytes(40).toString('hex');
     const hashedRefreshToken = await bcrypt.hash(newRefreshToken, BCRYPT_ROUNDS);
 
@@ -542,62 +502,38 @@ export class AuthService {
   /**
    * POST /auth/login
    *
+   * Password-only login — no OTP required.
    * Flow:
-   *  1. Look up user by phone number (must be active + verified)
+   *  1. Look up user by email (must be active + verified)
    *  2. Validate password via bcrypt
-   *  3. Generate a fresh OTP and send via Twilio
-   *  4. Issue an access token cookie (the user needs it for /verifyOtp)
-   *  5. After OTP is verified, full access + refresh tokens are issued
+   *  3. Issue full access + refresh token cookies directly
    */
   async login(dto: LoginDto, res: Response): Promise<{ message: string }> {
-    const { phoneNumber, password } = dto;
+    const { email, password } = dto;
 
     const user = await this.prismaService.user.findFirst({
-      where: { phoneNumber, deletedAt: null },
+      where: { email, deletedAt: null },
     });
 
     if (!user) {
-      throw new UnauthorizedException('Invalid phone number or password');
+      throw new UnauthorizedException('Invalid email or password');
     }
 
     if (!user.isVerified) {
       throw new UnauthorizedException(
-        'Account is not verified. Please register again.',
+        'Account is not verified. Please complete email verification first.',
       );
     }
 
     // Constant-time bcrypt comparison — prevents timing attacks
     const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid phone number or password');
+      throw new UnauthorizedException('Invalid email or password');
     }
 
-    if (this.configService.get<string>('nodeEnv') === 'development') {
-      await this.issueFullAuthTokens(user.id, user.phoneNumber, res);
-      return { message: 'Login successful (development bypass)' };
-    }
-
-    // Generate OTP for login verification
-    const otp = this.generateOtp();
-    const hashedOtp = await bcrypt.hash(otp, BCRYPT_ROUNDS);
-    const otpExpiry = this.getOtpExpiry();
-
-    await this.prismaService.user.update({
-      where: { id: user.id },
-      data: { hashedOtp, otpExpiry },
-    });
-
-    await this.sendOtp(phoneNumber, otp);
-
-    // Issue a temporary access token so the client can hit /verifyOtp
-    const accessToken = this.signAccessToken(user.id, user.phoneNumber);
-    const accessExpiry =
-      this.configService.get<number>('jwt.accessExpiry') ?? 900;
-
-    await this.redisService.cacheAccessToken(user.id, accessToken, accessExpiry);
-    this.setAccessCookie(res, accessToken);
-
-    return { message: 'OTP sent to your phone number' };
+    // Issue full auth tokens directly — no OTP step required on login
+    await this.issueFullAuthTokens(user.id, user.email, res);
+    return { message: 'Login successful' };
   }
 
   // ─── Logout ─────────────────────────────────────────────────────────────────
@@ -639,26 +575,26 @@ export class AuthService {
    *
    * Public endpoint — no JWT required.
    * Flow:
-   *  1. Look up the user by phone number (must exist and be verified)
+   *  1. Look up the user by email (must exist and be verified)
    *  2. Generate an OTP, hash it, set expiry
-   *  3. Send the OTP via Twilio
+   *  3. Log the OTP to the server console
    *  4. Issue a temporary access token (used to authenticate /resetPassword)
    *
-   * The generic error message "If an account exists..." prevents phone enumeration.
+   * The generic error message "If an account exists..." prevents email enumeration.
    */
   async forgotPassword(
     dto: ForgotPasswordDto,
     res: Response,
   ): Promise<{ message: string }> {
     const user = await this.prismaService.user.findFirst({
-      where: { phoneNumber: dto.phoneNumber, deletedAt: null },
+      where: { email: dto.email, deletedAt: null },
     });
 
     if (!user || !user.isVerified) {
-      // Return a generic success message to prevent phone number enumeration
+      // Return a generic success message to prevent email enumeration
       return {
         message:
-          'If an account with that number exists, an OTP has been sent.',
+          'If an account with that email exists, an OTP has been sent.',
       };
     }
 
@@ -671,10 +607,10 @@ export class AuthService {
       data: { hashedOtp, otpExpiry },
     });
 
-    await this.sendOtp(dto.phoneNumber, otp);
+    await this.sendEmailOtp(dto.email, otp);
 
     // Issue a temporary access token so the client can authenticate /resetPassword
-    const accessToken = this.signAccessToken(user.id, user.phoneNumber);
+    const accessToken = this.signAccessToken(user.id, user.email);
     const accessExpiry =
       this.configService.get<number>('jwt.accessExpiry') ?? 900;
 
@@ -682,7 +618,7 @@ export class AuthService {
     this.setAccessCookie(res, accessToken);
 
     return {
-      message: 'If an account with that number exists, an OTP has been sent.',
+      message: 'If an account with that email exists, an OTP has been sent.',
     };
   }
 

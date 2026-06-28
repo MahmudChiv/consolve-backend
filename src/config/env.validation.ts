@@ -35,4 +35,12 @@ export const validationSchema = Joi.object({
   DEEPGRAM_API_KEY: Joi.string().required(),
   ELEVENLABS_API_KEY: Joi.string().required(),
   ELEVENLABS_VOICE_ID: Joi.string().required(),
+
+  // ── SMTP (Nodemailer) ──────────────────────────────────────────────────────
+  SMTP_HOST: Joi.string().optional(),
+  SMTP_PORT: Joi.number().default(587),
+  SMTP_SECURE: Joi.boolean().default(false),
+  SMTP_USER: Joi.string().optional(),
+  SMTP_PASS: Joi.string().optional(),
+  SMTP_FROM: Joi.string().default('Consolve <no-reply@consolve.dev>'),
 });

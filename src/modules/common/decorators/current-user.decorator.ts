@@ -20,14 +20,14 @@ import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 /**
  * Shape of the JWT access token payload.
  *
- * `sub`         — Subject: the user's UUID (standard JWT claim)
- * `phoneNumber` — Included for convenience so controllers don't need DB lookups
- * `iat`         — Issued-at timestamp (seconds since epoch, added by jwtService.sign)
- * `exp`         — Expiry timestamp (seconds since epoch, added by jwtService.sign)
+ * `sub`   — Subject: the user's UUID (standard JWT claim)
+ * `email` — Included for convenience so controllers don't need DB lookups
+ * `iat`   — Issued-at timestamp (seconds since epoch, added by jwtService.sign)
+ * `exp`   — Expiry timestamp (seconds since epoch, added by jwtService.sign)
  */
 export interface JwtPayload {
   sub: string;
-  phoneNumber: string;
+  email: string;
   iat?: number;
   exp?: number;
 }

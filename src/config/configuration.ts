@@ -74,4 +74,13 @@ export default () => ({
     /** Voice ID to use for TTS synthesis */
     voiceId: process.env.ELEVENLABS_VOICE_ID,
   },
+
+  smtp: {
+    host: process.env.SMTP_HOST ?? undefined,
+    port: parseInt(process.env.SMTP_PORT ?? '587', 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER ?? undefined,
+    pass: process.env.SMTP_PASS ?? undefined,
+    from: process.env.SMTP_FROM ?? 'Consolve <no-reply@consolve.dev>',
+  },
 });

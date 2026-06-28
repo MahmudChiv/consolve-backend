@@ -2,18 +2,18 @@
  * login.dto.ts
  *
  * DTO for POST /auth/login.
- * Identical fields to RegisterDto — phone number + password.
+ * Email + password — no OTP required on login.
  */
 import { ApiProperty } from '@nestjs/swagger';
-import { IsPhoneNumber, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsString, MinLength } from 'class-validator';
 
 export class LoginDto {
   @ApiProperty({
-    description: 'User phone number in E.164 format',
-    example: '+2348012345678',
+    description: 'User email address',
+    example: 'user@example.com',
   })
-  @IsPhoneNumber()
-  phoneNumber: string;
+  @IsEmail()
+  email: string;
 
   @ApiProperty({
     description: 'Account password',

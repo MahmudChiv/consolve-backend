@@ -27,7 +27,7 @@ const mockRes = {
 
 const makeReq = (cookies: Record<string, string> = {}): Partial<Request> => ({
   cookies,
-  user: { sub: 'user-uuid', phoneNumber: '+2348000000001' },
+  user: { sub: 'user-uuid', email: 'test@consolve.dev' },
 });
 
 describe('AuthController', () => {
@@ -53,13 +53,13 @@ describe('AuthController', () => {
 
   describe('register', () => {
     it('should call authService.register and return result', async () => {
-      const dto: RegisterDto = { phoneNumber: '+2348000000001', password: 'MyStr0ng!Pass' };
-      mockAuthService.register.mockResolvedValue({ message: 'OTP sent to your phone number' });
+      const dto: RegisterDto = { email: 'test@consolve.dev', password: 'MyStr0ng!Pass' };
+      mockAuthService.register.mockResolvedValue({ message: 'OTP sent to your email address' });
 
       const result = await controller.register(dto, mockRes);
 
       expect(mockAuthService.register).toHaveBeenCalledWith(dto, mockRes);
-      expect(result.message).toBe('OTP sent to your phone number');
+      expect(result.message).toBe('OTP sent to your email address');
     });
   });
 
@@ -67,11 +67,11 @@ describe('AuthController', () => {
     it('should call authService.verifyOtp with correct args', async () => {
       const dto: VerifyOtpDto = { otp: '123456' };
       const req = makeReq({ access_token: 'old.token' }) as Request;
-      mockAuthService.verifyOtp.mockResolvedValue({ message: 'Phone number verified successfully' });
+      mockAuthService.verifyOtp.mockResolvedValue({ message: 'Email verified successfully' });
 
       const result = await controller.verifyOtp(
         dto,
-        { sub: 'user-uuid', phoneNumber: '+234' },
+        { sub: 'user-uuid', email: 'test@consolve.dev' },
         req,
         mockRes,
       );
@@ -82,18 +82,18 @@ describe('AuthController', () => {
         'old.token',
         mockRes,
       );
-      expect(result.message).toBe('Phone number verified successfully');
+      expect(result.message).toBe('Email verified successfully');
     });
   });
 
   describe('resendOtp', () => {
     it('should call authService.resendOtp', async () => {
-      mockAuthService.resendOtp.mockResolvedValue({ message: 'OTP resent to your phone number' });
+      mockAuthService.resendOtp.mockResolvedValue({ message: 'OTP resent to your email address' });
 
-      const result = await controller.resendOtp({ sub: 'user-uuid', phoneNumber: '+234' });
+      const result = await controller.resendOtp({ sub: 'user-uuid', email: 'test@consolve.dev' });
 
       expect(mockAuthService.resendOtp).toHaveBeenCalledWith('user-uuid');
-      expect(result.message).toBe('OTP resent to your phone number');
+      expect(result.message).toBe('OTP resent to your email address');
     });
   });
 
@@ -106,7 +106,7 @@ describe('AuthController', () => {
     it('should call authService.refresh when refresh token present', async () => {
       const req = {
         cookies: { refresh_token: 'rt', access_token: 'at' },
-        user: { sub: 'user-uuid', phoneNumber: '+234' },
+        user: { sub: 'user-uuid', email: 'test@consolve.dev' },
       } as unknown as Request;
       mockAuthService.refresh.mockResolvedValue({ message: 'Tokens refreshed successfully' });
 
@@ -124,13 +124,13 @@ describe('AuthController', () => {
 
   describe('login', () => {
     it('should call authService.login', async () => {
-      const dto = { phoneNumber: '+2348000000001', password: 'password' };
-      mockAuthService.login.mockResolvedValue({ message: 'OTP sent' });
+      const dto = { email: 'test@consolve.dev', password: 'password' };
+      mockAuthService.login.mockResolvedValue({ message: 'Login successful' });
 
       const result = await controller.login(dto, mockRes);
 
       expect(mockAuthService.login).toHaveBeenCalledWith(dto, mockRes);
-      expect(result.message).toBe('OTP sent');
+      expect(result.message).toBe('Login successful');
     });
   });
 
@@ -140,7 +140,7 @@ describe('AuthController', () => {
       mockAuthService.logout.mockResolvedValue({ message: 'Logged out' });
 
       const result = await controller.logout(
-        { sub: 'user-uuid', phoneNumber: '+234' },
+        { sub: 'user-uuid', email: 'test@consolve.dev' },
         req,
         mockRes,
       );
@@ -152,7 +152,7 @@ describe('AuthController', () => {
 
   describe('forgotPassword', () => {
     it('should call authService.forgotPassword', async () => {
-      const dto = { phoneNumber: '+2348000000001' };
+      const dto = { email: 'test@consolve.dev' };
       mockAuthService.forgotPassword.mockResolvedValue({ message: 'OTP sent' });
 
       const result = await controller.forgotPassword(dto, mockRes);
@@ -170,7 +170,7 @@ describe('AuthController', () => {
 
       const result = await controller.resetPassword(
         dto,
-        { sub: 'user-uuid', phoneNumber: '+234' },
+        { sub: 'user-uuid', email: 'test@consolve.dev' },
         req,
         mockRes,
       );

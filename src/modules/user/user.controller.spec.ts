@@ -57,7 +57,7 @@ describe('UserController', () => {
 
       const result = await controller.updateProfile(dto, {
         sub: 'user-uuid',
-        phoneNumber: '+2348000000001',
+        email: 'test@consolve.dev',
       });
 
       expect(mockUserService.createProfile).toHaveBeenCalledWith('user-uuid', dto);
@@ -75,7 +75,7 @@ describe('UserController', () => {
       mockUserService.createProfile.mockRejectedValue(new Error('Not verified'));
 
       await expect(
-        controller.updateProfile(dto, { sub: 'user-uuid', phoneNumber: '+234' }),
+        controller.updateProfile(dto, { sub: 'user-uuid', email: 'test@consolve.dev' }),
       ).rejects.toThrow('Not verified');
     });
   });

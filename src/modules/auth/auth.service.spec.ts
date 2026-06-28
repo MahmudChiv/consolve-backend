@@ -8,26 +8,7 @@
  *  - RedisService  — in-memory mock object
  *  - JwtService    — returns a static signed token
  *  - ConfigService — returns hardcoded config values
- *  - twilio        — module-level mock (must be declared before imports)
- *
- * The twilio mock is hoisted by Jest before module resolution, ensuring
- * AuthService receives the mocked client rather than the real one.
  */
-
-// ── Twilio mock — must be declared BEFORE any imports that trigger AuthService ──
-// jest.mock is hoisted to the top of the file by babel-jest regardless of
-// position, but we keep it here for clarity.
-const mockTwilioCreate = jest.fn().mockResolvedValue({ sid: 'SM_TEST' });
-
-jest.mock('twilio', () => {
-  // twilio is a CommonJS module that exports a function directly.
-  // When auth.service.ts does: const twilio = require('twilio'),
-  // calling twilio(sid, token) must return the mock client.
-  const mockFn = jest.fn().mockImplementation(() => ({
-    messages: { create: mockTwilioCreate },
-  }));
-  return mockFn;
-});
 
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -37,6 +18,7 @@ import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
+import { MailService } from '../common/mail/mail.service';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
@@ -75,12 +57,14 @@ const mockConfig = {
       'jwt.refreshExpiry': 604800,
       'otp.expirySeconds': 600,
       'nodeEnv': 'test',
-      'twilio.accountSid': 'AC_TEST',
-      'twilio.authToken': 'AUTH_TEST',
-      'twilio.phoneNumber': '+10000000000',
     };
     return map[key];
   }),
+};
+
+// ── Mail mock — no-op so tests never call the network ────────────────────────
+const mockMail = {
+  sendOtp: jest.fn().mockResolvedValue(undefined),
 };
 
 // ── Response mock ─────────────────────────────────────────────────────────────
@@ -92,7 +76,7 @@ const mockRes = {
 // ── User factory ──────────────────────────────────────────────────────────────
 const makeUser = (overrides = {}) => ({
   id: 'user-uuid',
-  phoneNumber: '+2348000000001',
+  email: 'test@consolve.dev',
   hashedPassword: 'hashed_pw',
   hashedOtp: 'hashed_otp',
   otpExpiry: new Date(Date.now() + 600_000), // expires in 10 min
@@ -119,6 +103,7 @@ describe('AuthService', () => {
         { provide: RedisService, useValue: mockRedis },
         { provide: JwtService, useValue: mockJwt },
         { provide: ConfigService, useValue: mockConfig },
+        { provide: MailService, useValue: mockMail },
       ],
     }).compile();
 
@@ -129,28 +114,27 @@ describe('AuthService', () => {
 
   describe('register', () => {
     const dto: RegisterDto = {
-      phoneNumber: '+2348000000001',
+      email: 'test@consolve.dev',
       password: 'MyStr0ng!Pass',
     };
 
-    it('should create a new user and send OTP', async () => {
+    it('should create a new user and send OTP via email console log', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);  // No existing user
       mockPrisma.user.upsert.mockResolvedValue(makeUser());
 
       const result = await service.register(dto, mockRes);
 
       expect(mockPrisma.user.upsert).toHaveBeenCalled();
-      expect(mockTwilioCreate).toHaveBeenCalled();
       expect(mockRedis.cacheAccessToken).toHaveBeenCalled();
       expect(mockRes.cookie).toHaveBeenCalledWith(
         'access_token',
         expect.any(String),
         expect.any(Object),
       );
-      expect(result.message).toBe('OTP sent to your phone number');
+      expect(result.message).toBe('OTP sent to your email address');
     });
 
-    it('should throw ConflictException if phone already registered and active', async () => {
+    it('should throw ConflictException if email already registered and active', async () => {
       // An existing account with no deletedAt is considered active
       mockPrisma.user.findUnique.mockResolvedValue(makeUser({ deletedAt: null }));
 
@@ -164,16 +148,7 @@ describe('AuthService', () => {
       mockPrisma.user.upsert.mockResolvedValue(makeUser());    // upsert call
 
       const result = await service.register(dto, mockRes);
-      expect(result.message).toBe('OTP sent to your phone number');
-    });
-
-    it('should fall back to mock SMS and not throw if Twilio fails', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue(null);
-      mockPrisma.user.upsert.mockResolvedValue(makeUser());
-      mockTwilioCreate.mockRejectedValueOnce(new Error('Twilio error'));
-
-      const result = await service.register(dto, mockRes);
-      expect(result.message).toBe('OTP sent to your phone number');
+      expect(result.message).toBe('OTP sent to your email address');
     });
   });
 
@@ -195,7 +170,7 @@ describe('AuthService', () => {
       expect(mockRedis.cacheAccessToken).toHaveBeenCalled();   // New token cached
       expect(mockRes.cookie).toHaveBeenCalledWith('access_token', expect.any(String), expect.any(Object));
       expect(mockRes.cookie).toHaveBeenCalledWith('refresh_token', expect.any(String), expect.any(Object));
-      expect(result.message).toBe('Phone number verified successfully');
+      expect(result.message).toBe('Email verified successfully');
     });
 
     it('should throw NotFoundException if user not found', async () => {
@@ -239,8 +214,7 @@ describe('AuthService', () => {
 
       const result = await service.resendOtp('user-uuid');
 
-      expect(mockTwilioCreate).toHaveBeenCalled();
-      expect(result.message).toBe('OTP resent to your phone number');
+      expect(result.message).toBe('OTP resent to your email address');
     });
 
     it('should throw NotFoundException if user not found', async () => {
@@ -324,7 +298,7 @@ describe('AuthService', () => {
   // ── login ─────────────────────────────────────────────────────────────────
 
   describe('login', () => {
-    it('should login and send OTP on correct credentials', async () => {
+    it('should login directly with email + password (no OTP)', async () => {
       const plainPassword = 'MyStr0ng!Pass';
       const hashedPassword = await bcrypt.hash(plainPassword, 10);
       mockPrisma.user.findFirst.mockResolvedValue(
@@ -333,19 +307,18 @@ describe('AuthService', () => {
       mockPrisma.user.update.mockResolvedValue({});
 
       const result = await service.login(
-        { phoneNumber: '+2348000000001', password: plainPassword },
+        { email: 'test@consolve.dev', password: plainPassword },
         mockRes,
       );
 
       expect(mockPrisma.user.update).toHaveBeenCalled();
-      expect(mockTwilioCreate).toHaveBeenCalled();
       expect(mockRedis.cacheAccessToken).toHaveBeenCalled();
       expect(mockRes.cookie).toHaveBeenCalledWith(
         'access_token',
         expect.any(String),
         expect.any(Object),
       );
-      expect(result.message).toBe('OTP sent to your phone number');
+      expect(result.message).toBe('Login successful');
     });
 
     it('should throw UnauthorizedException if user does not exist', async () => {
@@ -353,7 +326,7 @@ describe('AuthService', () => {
 
       await expect(
         service.login(
-          { phoneNumber: '+2348000000001', password: 'password' },
+          { email: 'noone@consolve.dev', password: 'password' },
           mockRes,
         ),
       ).rejects.toThrow(UnauthorizedException);
@@ -364,7 +337,7 @@ describe('AuthService', () => {
 
       await expect(
         service.login(
-          { phoneNumber: '+2348000000001', password: 'password' },
+          { email: 'test@consolve.dev', password: 'password' },
           mockRes,
         ),
       ).rejects.toThrow(UnauthorizedException);
@@ -378,7 +351,7 @@ describe('AuthService', () => {
 
       await expect(
         service.login(
-          { phoneNumber: '+2348000000001', password: 'wrong_password' },
+          { email: 'test@consolve.dev', password: 'wrong_password' },
           mockRes,
         ),
       ).rejects.toThrow(UnauthorizedException);
@@ -415,12 +388,11 @@ describe('AuthService', () => {
       mockPrisma.user.update.mockResolvedValue({});
 
       const result = await service.forgotPassword(
-        { phoneNumber: '+2348000000001' },
+        { email: 'test@consolve.dev' },
         mockRes,
       );
 
       expect(mockPrisma.user.update).toHaveBeenCalled();
-      expect(mockTwilioCreate).toHaveBeenCalled();
       expect(mockRedis.cacheAccessToken).toHaveBeenCalled();
       expect(mockRes.cookie).toHaveBeenCalledWith(
         'access_token',
@@ -428,7 +400,7 @@ describe('AuthService', () => {
         expect.any(Object),
       );
       expect(result.message).toBe(
-        'If an account with that number exists, an OTP has been sent.',
+        'If an account with that email exists, an OTP has been sent.',
       );
     });
 
@@ -436,14 +408,13 @@ describe('AuthService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
 
       const result = await service.forgotPassword(
-        { phoneNumber: '+2348000000001' },
+        { email: 'noone@consolve.dev' },
         mockRes,
       );
 
       expect(mockPrisma.user.update).not.toHaveBeenCalled();
-      expect(mockTwilioCreate).not.toHaveBeenCalled();
       expect(result.message).toBe(
-        'If an account with that number exists, an OTP has been sent.',
+        'If an account with that email exists, an OTP has been sent.',
       );
     });
   });

@@ -16,7 +16,7 @@ async function main() {
   const adapter = new PrismaPg(pool);
   const prisma = new PrismaClient({ adapter });
 
-  const testPhoneNumber = '+2348000000001';
+  const testEmail = 'test@consolve.dev';
   const testPassword = 'Password123!';
   const hashedPassword = await bcrypt.hash(testPassword, BCRYPT_ROUNDS);
 
@@ -24,7 +24,7 @@ async function main() {
 
   // Delete existing identity first to prevent foreign key errors
   const existingUser = await prisma.user.findUnique({
-    where: { phoneNumber: testPhoneNumber },
+    where: { email: testEmail },
     include: { profiles: true }
   });
 
@@ -43,7 +43,7 @@ async function main() {
   // Create a verified user and profile
   const user = await prisma.user.create({
     data: {
-      phoneNumber: testPhoneNumber,
+      email: testEmail,
       hashedPassword,
       isVerified: true,
       profiles: {
@@ -70,7 +70,7 @@ async function main() {
       userId: user.id,
       userProfileId: profile.id,
       profession: 'Tailor',
-      summary: 'Specialist in custom men\'s senator and traditional wear.',
+      summary: "Specialist in custom men's senator and traditional wear.",
       expertise: ['senator wear', 'agbada', 'ankara'],
       experience: 5,
       availability: { type: 'full-time', days: 'Mon-Sat' },
@@ -85,9 +85,9 @@ async function main() {
 
   console.log('Seed completed successfully!');
   console.log(`Verified user created:`);
-  console.log(`Phone: ${testPhoneNumber}`);
+  console.log(`Email:    ${testEmail}`);
   console.log(`Password: ${testPassword}`);
-  console.log(`User ID: ${user.id}`);
+  console.log(`User ID:  ${user.id}`);
   console.log(`Profile ID: ${profile.id}`);
   console.log(`Identity ID: ${identity.id}`);
 

@@ -41,7 +41,7 @@ enum BookingType {
 
 model User {
   id             String        @id @default(uuid())
-  phoneNumber    String        @unique
+  email          String        @unique
   hashedPassword String
   hashedOtp      String?
   otpExpiry      DateTime?
@@ -53,7 +53,7 @@ model User {
   profiles       UserProfile[]
   identities     Identity[]
 
-  @@index([phoneNumber])
+  @@index([email])
 }
 
 model UserProfile {
@@ -73,6 +73,10 @@ model UserProfile {
   bookingsAsProvider Booking[]        @relation("ProviderProfile")
   reviewsGiven       Review[]         @relation("ReviewerProfile")
   reviewsReceived    Review[]         @relation("ProviderReviews")
+  trustScore         TrustScore?
+  vouchesGiven       Vouch[]          @relation("VouchesGiven")
+  vouchesReceived    Vouch[]          @relation("VouchesReceived")
+  notifications      Notification[]
 
   @@unique([userId, type])
   @@index([userId])
@@ -168,3 +172,65 @@ model Review {
   @@index([providerProfileId])
   @@map("reviews")
 }
+
+enum NotificationType {
+  BOOKING_REQUEST
+  BOOKING_ACCEPTED
+  BOOKING_COMPLETED
+  BOOKING_CANCELLED
+  BOOKING_DISPUTED
+  TRUST_SCORE_UPDATED
+  REVIEW_RECEIVED
+  VOUCH_RECEIVED
+  SYSTEM
+}
+
+model TrustScore {
+  id                String      @id @default(uuid())
+  userProfileId     String      @unique
+  overallScore      Int         @default(0)
+  completionRate    Float       @default(0)
+  communityScore    Float       @default(0)
+  paymentReliability Float       @default(70)
+  responseTimeScore  Float       @default(70)
+  profileCompleteness Float     @default(0)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  userProfile       UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+}
+
+model Vouch {
+  id                String      @id @default(uuid())
+  voucherId         String
+  voucherProfileId  String
+  providerId        String
+  providerProfileId String
+  message           String?
+  createdAt         DateTime    @default(now())
+
+  voucherProfile    UserProfile @relation("VouchesGiven", fields: [voucherProfileId], references: [id], onDelete: Cascade)
+  providerProfile    UserProfile @relation("VouchesReceived", fields: [providerProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([voucherProfileId, providerProfileId])
+  @@index([providerProfileId])
+  @@map("vouches")
+}
+
+model Notification {
+  id                String           @id @default(uuid())
+  userId            String
+  userProfileId     String
+  type              NotificationType
+  title             String
+  message           String
+  data              Json?
+  isRead            Boolean          @default(false)
+  createdAt         DateTime         @default(now())
+
+  userProfile       UserProfile      @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userProfileId])
+  @@index([isRead])
+  @@map("notifications")
+}
