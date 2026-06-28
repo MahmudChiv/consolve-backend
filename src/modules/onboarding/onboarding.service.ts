@@ -308,22 +308,82 @@ For summary, the field is "summary" and the value is the 2-3 sentence bio.
 
   /**
    * Upsert the Identity row with whichever fields are currently known.
-   * Using upsert so partial updates work without requiring all fields.
+   * Parses AI-extracted strings into the correct DB types:
+   *   expertise  → String[]   (split on comma)
+   *   experience → Int?       (extract leading integer)
+   *   availability → Json?    (wrap in {description: ...})
+   *   pricing    → Json?      (parse ₦X–₦Y range or wrap raw)
+   *   latitude/longitude → Float? (already Float in DB, cast from string if needed)
    */
   private async upsertIdentity(
     userId: string,
     userProfileId: string,
     state: Partial<IdentityState>,
   ): Promise<void> {
+    // ── expertise: "senator wear, agbada, ankara" → ["senator wear", "agbada", "ankara"]
+    const expertise: string[] = state.expertise
+      ? state.expertise
+          .split(/[,;|]/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+    // ── experience: "8 years" | "8" → 8
+    let experience: number | undefined;
+    if (state.experience) {
+      const match = state.experience.match(/\d+/);
+      experience = match ? parseInt(match[0], 10) : undefined;
+    }
+
+    // ── availability: "full-time, weekdays" → { description, type }
+    let availability: object | undefined;
+    if (state.availability) {
+      const raw = state.availability.toLowerCase();
+      availability = {
+        description: state.availability,
+        type: raw.includes('full') ? 'full-time' : 'part-time',
+        ...(raw.includes('weekday') && { preferredDays: 'weekdays' }),
+        ...(raw.includes('weekend') && { preferredDays: 'weekends' }),
+      };
+    }
+
+    // ── pricing: "₦5,000 – ₦15,000/hr" → { min, max, currency, unit, raw }
+    let pricing: object | undefined;
+    if (state.pricing) {
+      const raw = state.pricing;
+      // Strip currency symbols and commas, extract numbers
+      const nums = raw.replace(/[₦,\s]/g, ' ').match(/\d+/g);
+      const unit = /\/hr/i.test(raw) ? 'per_hour'
+        : /\/day/i.test(raw) ? 'per_day'
+        : /\/item/i.test(raw) ? 'per_item'
+        : 'per_project';
+
+      pricing = nums && nums.length >= 2
+        ? { min: parseInt(nums[0]), max: parseInt(nums[1]), currency: 'NGN', unit, raw }
+        : nums && nums.length === 1
+        ? { min: parseInt(nums[0]), currency: 'NGN', unit, raw }
+        : { raw, currency: 'NGN', unit };
+    }
+
     await this.prismaService.identity.upsert({
       where: { userProfileId },
       create: {
         userId,
         userProfileId,
-        ...state,
+        profession: state.profession,
+        summary: state.summary,
+        expertise,
+        ...(experience !== undefined && { experience }),
+        ...(availability !== undefined && { availability }),
+        ...(pricing !== undefined && { pricing }),
       },
       update: {
-        ...state,
+        ...(state.profession !== undefined && { profession: state.profession }),
+        ...(state.summary !== undefined && { summary: state.summary }),
+        ...(state.expertise !== undefined && { expertise }),
+        ...(experience !== undefined && { experience }),
+        ...(availability !== undefined && { availability }),
+        ...(pricing !== undefined && { pricing }),
       },
     });
   }
