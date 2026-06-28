@@ -14,9 +14,16 @@ const mockAuthService = {
   verifyOtp: jest.fn(),
   resendOtp: jest.fn(),
   refresh: jest.fn(),
+  login: jest.fn(),
+  logout: jest.fn(),
+  forgotPassword: jest.fn(),
+  resetPassword: jest.fn(),
 };
 
-const mockRes = { cookie: jest.fn() } as unknown as Response;
+const mockRes = {
+  cookie: jest.fn(),
+  clearCookie: jest.fn(),
+} as unknown as Response;
 
 const makeReq = (cookies: Record<string, string> = {}): Partial<Request> => ({
   cookies,
@@ -112,6 +119,69 @@ describe('AuthController', () => {
         mockRes,
       );
       expect(result.message).toBe('Tokens refreshed successfully');
+    });
+  });
+
+  describe('login', () => {
+    it('should call authService.login', async () => {
+      const dto = { phoneNumber: '+2348000000001', password: 'password' };
+      mockAuthService.login.mockResolvedValue({ message: 'OTP sent' });
+
+      const result = await controller.login(dto, mockRes);
+
+      expect(mockAuthService.login).toHaveBeenCalledWith(dto, mockRes);
+      expect(result.message).toBe('OTP sent');
+    });
+  });
+
+  describe('logout', () => {
+    it('should call authService.logout', async () => {
+      const req = { cookies: { access_token: 'at' } } as unknown as Request;
+      mockAuthService.logout.mockResolvedValue({ message: 'Logged out' });
+
+      const result = await controller.logout(
+        { sub: 'user-uuid', phoneNumber: '+234' },
+        req,
+        mockRes,
+      );
+
+      expect(mockAuthService.logout).toHaveBeenCalledWith('user-uuid', 'at', mockRes);
+      expect(result.message).toBe('Logged out');
+    });
+  });
+
+  describe('forgotPassword', () => {
+    it('should call authService.forgotPassword', async () => {
+      const dto = { phoneNumber: '+2348000000001' };
+      mockAuthService.forgotPassword.mockResolvedValue({ message: 'OTP sent' });
+
+      const result = await controller.forgotPassword(dto, mockRes);
+
+      expect(mockAuthService.forgotPassword).toHaveBeenCalledWith(dto, mockRes);
+      expect(result.message).toBe('OTP sent');
+    });
+  });
+
+  describe('resetPassword', () => {
+    it('should call authService.resetPassword', async () => {
+      const dto = { otp: '123456', newPassword: 'NewStr0ng!Pass' };
+      const req = { cookies: { access_token: 'at' } } as unknown as Request;
+      mockAuthService.resetPassword.mockResolvedValue({ message: 'Password reset' });
+
+      const result = await controller.resetPassword(
+        dto,
+        { sub: 'user-uuid', phoneNumber: '+234' },
+        req,
+        mockRes,
+      );
+
+      expect(mockAuthService.resetPassword).toHaveBeenCalledWith(
+        'user-uuid',
+        dto,
+        'at',
+        mockRes,
+      );
+      expect(result.message).toBe('Password reset');
     });
   });
 });

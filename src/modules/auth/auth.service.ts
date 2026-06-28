@@ -5,9 +5,13 @@
  *
  * Responsibilities:
  *  - register()      Create account, send OTP via Twilio, issue access token cookie
+ *  - login()         Validate credentials, send OTP, issue access token cookie
  *  - verifyOtp()     Validate OTP, mark account verified, rotate tokens
  *  - resendOtp()     Generate and send a fresh OTP for unverified accounts
+ *  - logout()        Revoke and blacklist tokens, clear cookies
  *  - refresh()       Validate refresh token, rotate both tokens
+ *  - forgotPassword()  Send OTP for password reset
+ *  - resetPassword()   Verify OTP and set new password
  *  - cleanupExpiredUnverifiedUsers() — cron job: soft-delete stale accounts
  *
  * Token strategy:
@@ -29,6 +33,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -40,7 +45,10 @@ import type { Twilio } from 'twilio';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { RegisterDto } from './dto/register.dto';
+import { LoginDto } from './dto/login.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Response } from 'express';
 
 /** bcrypt cost factor — 12 rounds is the OWASP-recommended minimum for passwords */
@@ -141,6 +149,19 @@ export class AuthService {
       sameSite: 'strict',
       maxAge,
     });
+  }
+
+  /**
+   * Clear both auth cookies — used on logout.
+   */
+  private clearAuthCookies(res: Response): void {
+    const cookieOpts = {
+      httpOnly: true,
+      secure: this.configService.get<string>('nodeEnv') === 'production',
+      sameSite: 'strict' as const,
+    };
+    res.clearCookie('access_token', cookieOpts);
+    res.clearCookie('refresh_token', cookieOpts);
   }
 
   /**
@@ -497,5 +518,210 @@ export class AuthService {
         `Soft-deleted ${result.count} expired unverified user account(s)`,
       );
     }
+  }
+
+  // ─── Login ──────────────────────────────────────────────────────────────────
+
+  /**
+   * POST /auth/login
+   *
+   * Flow:
+   *  1. Look up user by phone number (must be active + verified)
+   *  2. Validate password via bcrypt
+   *  3. Generate a fresh OTP and send via Twilio
+   *  4. Issue an access token cookie (the user needs it for /verifyOtp)
+   *  5. After OTP is verified, full access + refresh tokens are issued
+   */
+  async login(dto: LoginDto, res: Response): Promise<{ message: string }> {
+    const { phoneNumber, password } = dto;
+
+    const user = await this.prismaService.user.findFirst({
+      where: { phoneNumber, deletedAt: null },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid phone number or password');
+    }
+
+    if (!user.isVerified) {
+      throw new UnauthorizedException(
+        'Account is not verified. Please register again.',
+      );
+    }
+
+    // Constant-time bcrypt comparison — prevents timing attacks
+    const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid phone number or password');
+    }
+
+    // Generate OTP for login verification
+    const otp = this.generateOtp();
+    const hashedOtp = await bcrypt.hash(otp, BCRYPT_ROUNDS);
+    const otpExpiry = this.getOtpExpiry();
+
+    await this.prismaService.user.update({
+      where: { id: user.id },
+      data: { hashedOtp, otpExpiry },
+    });
+
+    await this.sendOtp(phoneNumber, otp);
+
+    // Issue a temporary access token so the client can hit /verifyOtp
+    const accessToken = this.signAccessToken(user.id, user.phoneNumber);
+    const accessExpiry =
+      this.configService.get<number>('jwt.accessExpiry') ?? 900;
+
+    await this.redisService.cacheAccessToken(user.id, accessToken, accessExpiry);
+    this.setAccessCookie(res, accessToken);
+
+    return { message: 'OTP sent to your phone number' };
+  }
+
+  // ─── Logout ─────────────────────────────────────────────────────────────────
+
+  /**
+   * POST /auth/logout
+   *
+   * Flow:
+   *  1. Blacklist the current access token in Redis (it remains invalid until it would have expired)
+   *  2. Delete the cached access token from Redis
+   *  3. Clear the refresh token from the DB (invalidates all future refresh attempts)
+   *  4. Clear both httpOnly cookies
+   */
+  async logout(
+    userId: string,
+    accessToken: string | undefined,
+    res: Response,
+  ): Promise<{ message: string }> {
+    // Blacklist the access token so it can't be reused
+    await this.blacklistOldAccessToken(userId, accessToken);
+
+    // Wipe the refresh token hash from the DB — no more refresh calls
+    await this.prismaService.user.update({
+      where: { id: userId },
+      data: { refreshToken: null },
+    });
+
+    // Clear both cookies from the browser
+    this.clearAuthCookies(res);
+
+    this.logger.log(`User ${userId} logged out`);
+    return { message: 'Logged out successfully' };
+  }
+
+  // ─── Forgot Password ────────────────────────────────────────────────────────
+
+  /**
+   * POST /auth/forgotPassword
+   *
+   * Public endpoint — no JWT required.
+   * Flow:
+   *  1. Look up the user by phone number (must exist and be verified)
+   *  2. Generate an OTP, hash it, set expiry
+   *  3. Send the OTP via Twilio
+   *  4. Issue a temporary access token (used to authenticate /resetPassword)
+   *
+   * The generic error message "If an account exists..." prevents phone enumeration.
+   */
+  async forgotPassword(
+    dto: ForgotPasswordDto,
+    res: Response,
+  ): Promise<{ message: string }> {
+    const user = await this.prismaService.user.findFirst({
+      where: { phoneNumber: dto.phoneNumber, deletedAt: null },
+    });
+
+    if (!user || !user.isVerified) {
+      // Return a generic success message to prevent phone number enumeration
+      return {
+        message:
+          'If an account with that number exists, an OTP has been sent.',
+      };
+    }
+
+    const otp = this.generateOtp();
+    const hashedOtp = await bcrypt.hash(otp, BCRYPT_ROUNDS);
+    const otpExpiry = this.getOtpExpiry();
+
+    await this.prismaService.user.update({
+      where: { id: user.id },
+      data: { hashedOtp, otpExpiry },
+    });
+
+    await this.sendOtp(dto.phoneNumber, otp);
+
+    // Issue a temporary access token so the client can authenticate /resetPassword
+    const accessToken = this.signAccessToken(user.id, user.phoneNumber);
+    const accessExpiry =
+      this.configService.get<number>('jwt.accessExpiry') ?? 900;
+
+    await this.redisService.cacheAccessToken(user.id, accessToken, accessExpiry);
+    this.setAccessCookie(res, accessToken);
+
+    return {
+      message: 'If an account with that number exists, an OTP has been sent.',
+    };
+  }
+
+  // ─── Reset Password ─────────────────────────────────────────────────────────
+
+  /**
+   * PATCH /auth/resetPassword
+   *
+   * Protected by JWT (from the forgotPassword step).
+   * Flow:
+   *  1. Validate the OTP (same as verifyOtp)
+   *  2. Hash the new password and update the User record
+   *  3. Blacklist the old access token
+   *  4. Invalidate the refresh token (force re-login)
+   *  5. Clear all cookies — user must log in again with the new password
+   */
+  async resetPassword(
+    userId: string,
+    dto: ResetPasswordDto,
+    oldToken: string | undefined,
+    res: Response,
+  ): Promise<{ message: string }> {
+    const user = await this.prismaService.user.findFirst({
+      where: { id: userId, deletedAt: null },
+    });
+
+    if (!user) throw new NotFoundException('User not found');
+
+    // Validate OTP
+    if (!user.otpExpiry || user.otpExpiry < new Date()) {
+      throw new BadRequestException('OTP has expired. Please request a new one.');
+    }
+
+    if (!user.hashedOtp) {
+      throw new BadRequestException('No OTP found. Please request a new one.');
+    }
+
+    const isOtpValid = await bcrypt.compare(dto.otp, user.hashedOtp);
+    if (!isOtpValid) {
+      throw new BadRequestException('Invalid OTP');
+    }
+
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
+
+    // Update password, clear OTP fields, invalidate refresh token
+    await this.prismaService.user.update({
+      where: { id: user.id },
+      data: {
+        hashedPassword,
+        hashedOtp: null,
+        otpExpiry: null,
+        refreshToken: null, // Force re-login after password change
+      },
+    });
+
+    // Blacklist the old access token and clear cookies
+    await this.blacklistOldAccessToken(userId, oldToken);
+    this.clearAuthCookies(res);
+
+    this.logger.log(`Password reset for user ${userId}`);
+    return { message: 'Password reset successfully. Please log in again.' };
   }
 }

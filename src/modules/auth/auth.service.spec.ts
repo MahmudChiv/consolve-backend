@@ -29,7 +29,7 @@ jest.mock('twilio', () => {
   return mockFn;
 });
 
-import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -86,6 +86,7 @@ const mockConfig = {
 // ── Response mock ─────────────────────────────────────────────────────────────
 const mockRes = {
   cookie: jest.fn(),
+  clearCookie: jest.fn(),
 } as unknown as Response;
 
 // ── User factory ──────────────────────────────────────────────────────────────
@@ -316,6 +317,215 @@ describe('AuthService', () => {
 
       // updateMany was still called — we just expect no side effects
       expect(mockPrisma.user.updateMany).toHaveBeenCalled();
+    });
+  });
+
+  // ── login ─────────────────────────────────────────────────────────────────
+
+  describe('login', () => {
+    it('should login and send OTP on correct credentials', async () => {
+      const plainPassword = 'MyStr0ng!Pass';
+      const hashedPassword = await bcrypt.hash(plainPassword, 10);
+      mockPrisma.user.findFirst.mockResolvedValue(
+        makeUser({ hashedPassword, isVerified: true }),
+      );
+      mockPrisma.user.update.mockResolvedValue({});
+
+      const result = await service.login(
+        { phoneNumber: '+2348000000001', password: plainPassword },
+        mockRes,
+      );
+
+      expect(mockPrisma.user.update).toHaveBeenCalled();
+      expect(mockTwilioCreate).toHaveBeenCalled();
+      expect(mockRedis.cacheAccessToken).toHaveBeenCalled();
+      expect(mockRes.cookie).toHaveBeenCalledWith(
+        'access_token',
+        expect.any(String),
+        expect.any(Object),
+      );
+      expect(result.message).toBe('OTP sent to your phone number');
+    });
+
+    it('should throw UnauthorizedException if user does not exist', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.login(
+          { phoneNumber: '+2348000000001', password: 'password' },
+          mockRes,
+        ),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should throw UnauthorizedException if user is not verified', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(makeUser({ isVerified: false }));
+
+      await expect(
+        service.login(
+          { phoneNumber: '+2348000000001', password: 'password' },
+          mockRes,
+        ),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should throw UnauthorizedException on wrong password', async () => {
+      const hashedPassword = await bcrypt.hash('correct_password', 10);
+      mockPrisma.user.findFirst.mockResolvedValue(
+        makeUser({ hashedPassword, isVerified: true }),
+      );
+
+      await expect(
+        service.login(
+          { phoneNumber: '+2348000000001', password: 'wrong_password' },
+          mockRes,
+        ),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  // ── logout ────────────────────────────────────────────────────────────────
+
+  describe('logout', () => {
+    it('should blacklist access token, clear refresh token in DB, and clear cookies', async () => {
+      mockPrisma.user.update.mockResolvedValue({});
+
+      const result = await service.logout('user-uuid', 'access.token', mockRes);
+
+      expect(mockRedis.blacklist).toHaveBeenCalledWith(
+        'access.token',
+        expect.any(Number),
+      );
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-uuid' },
+        data: { refreshToken: null },
+      });
+      expect(mockRes.clearCookie).toHaveBeenCalledWith('access_token', expect.any(Object));
+      expect(mockRes.clearCookie).toHaveBeenCalledWith('refresh_token', expect.any(Object));
+      expect(result.message).toBe('Logged out successfully');
+    });
+  });
+
+  // ── forgotPassword ────────────────────────────────────────────────────────
+
+  describe('forgotPassword', () => {
+    it('should send OTP and return generic message if user is found and verified', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(makeUser({ isVerified: true }));
+      mockPrisma.user.update.mockResolvedValue({});
+
+      const result = await service.forgotPassword(
+        { phoneNumber: '+2348000000001' },
+        mockRes,
+      );
+
+      expect(mockPrisma.user.update).toHaveBeenCalled();
+      expect(mockTwilioCreate).toHaveBeenCalled();
+      expect(mockRedis.cacheAccessToken).toHaveBeenCalled();
+      expect(mockRes.cookie).toHaveBeenCalledWith(
+        'access_token',
+        expect.any(String),
+        expect.any(Object),
+      );
+      expect(result.message).toBe(
+        'If an account with that number exists, an OTP has been sent.',
+      );
+    });
+
+    it('should return generic success message even if user does not exist (enumeration check)', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+
+      const result = await service.forgotPassword(
+        { phoneNumber: '+2348000000001' },
+        mockRes,
+      );
+
+      expect(mockPrisma.user.update).not.toHaveBeenCalled();
+      expect(mockTwilioCreate).not.toHaveBeenCalled();
+      expect(result.message).toBe(
+        'If an account with that number exists, an OTP has been sent.',
+      );
+    });
+  });
+
+  // ── resetPassword ─────────────────────────────────────────────────────────
+
+  describe('resetPassword', () => {
+    it('should update password and invalidate sessions on valid OTP', async () => {
+      const hashedOtp = await bcrypt.hash('123456', 10);
+      mockPrisma.user.findFirst.mockResolvedValue(
+        makeUser({ hashedOtp, otpExpiry: new Date(Date.now() + 60_000) }),
+      );
+      mockPrisma.user.update.mockResolvedValue({});
+
+      const result = await service.resetPassword(
+        'user-uuid',
+        { otp: '123456', newPassword: 'NewStr0ng!Pass' },
+        'temp.token',
+        mockRes,
+      );
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-uuid' },
+        data: expect.objectContaining({
+          hashedPassword: expect.any(String),
+          hashedOtp: null,
+          otpExpiry: null,
+          refreshToken: null,
+        }),
+      });
+      expect(mockRedis.blacklist).toHaveBeenCalledWith(
+        'temp.token',
+        expect.any(Number),
+      );
+      expect(mockRes.clearCookie).toHaveBeenCalledWith('access_token', expect.any(Object));
+      expect(mockRes.clearCookie).toHaveBeenCalledWith('refresh_token', expect.any(Object));
+      expect(result.message).toBe(
+        'Password reset successfully. Please log in again.',
+      );
+    });
+
+    it('should throw NotFoundException if user is not found', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.resetPassword(
+          'missing',
+          { otp: '123456', newPassword: 'NewStr0ng!Pass' },
+          undefined,
+          mockRes,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw BadRequestException if OTP expired', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(
+        makeUser({ otpExpiry: new Date(Date.now() - 1000) }),
+      );
+
+      await expect(
+        service.resetPassword(
+          'user-uuid',
+          { otp: '123456', newPassword: 'NewStr0ng!Pass' },
+          undefined,
+          mockRes,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw BadRequestException if OTP is wrong', async () => {
+      const hashedOtp = await bcrypt.hash('999999', 10);
+      mockPrisma.user.findFirst.mockResolvedValue(
+        makeUser({ hashedOtp, otpExpiry: new Date(Date.now() + 60_000) }),
+      );
+
+      await expect(
+        service.resetPassword(
+          'user-uuid',
+          { otp: '123456', newPassword: 'NewStr0ng!Pass' },
+          undefined,
+          mockRes,
+        ),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

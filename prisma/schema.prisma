@@ -20,6 +20,12 @@ enum UserType {
   CUSTOMER
 }
 
+enum OnboardingStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
 model User {
   id             String        @id @default(uuid())
   phoneNumber    String        @unique
@@ -32,22 +38,51 @@ model User {
   updatedAt      DateTime      @updatedAt
   deletedAt      DateTime?
   profiles       UserProfile[]
+  identities     Identity[]
 
   @@index([phoneNumber])
 }
 
 model UserProfile {
-  id        String   @id @default(uuid())
-  userId    String
-  firstName String
-  lastName  String
-  gender    Gender
-  type      UserType
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id])
+  id               String           @id @default(uuid())
+  userId           String
+  firstName        String
+  lastName         String
+  gender           Gender
+  type             UserType
+  avatarUrl        String?
+  onboardingStatus OnboardingStatus @default(PENDING)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  user             User             @relation(fields: [userId], references: [id])
+  identity         Identity?
 
   @@unique([userId, type])
   @@index([userId])
   @@index([type])
+}
+
+model Identity {
+  id            String      @id @default(uuid())
+  userId        String
+  userProfileId String      @unique
+  profession    String?
+  summary       String?
+  expertise     String?
+  experience    String?
+  availability  String?
+  pricing       String?
+  latitude      String?
+  longitude     String?
+  city          String?
+  state         String?
+  country       String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  deletedAt     DateTime?
+  user          User        @relation(fields: [userId], references: [id])
+  userProfile   UserProfile @relation(fields: [userProfileId], references: [id])
+
+  @@index([userId])
+  @@index([userProfileId])
 }

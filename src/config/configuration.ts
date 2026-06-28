@@ -55,4 +55,21 @@ export default () => ({
     /** OTP lifetime in seconds (default: 600 = 10 minutes) */
     expirySeconds: parseInt(process.env.OTP_EXPIRY_SECONDS ?? '600', 10),
   },
+
+  gemini: {
+    /** Google Gemini API key — from https://aistudio.google.com/apikey */
+    apiKey: process.env.GEMINI_API_KEY,
+  },
+
+  deepgram: {
+    /** Deepgram API key — from https://console.deepgram.com */
+    apiKey: process.env.DEEPGRAM_API_KEY,
+  },
+
+  elevenlabs: {
+    /** ElevenLabs API key — from https://elevenlabs.io/app/settings/api-keys */
+    apiKey: process.env.ELEVENLABS_API_KEY,
+    /** Voice ID to use for TTS synthesis */
+    voiceId: process.env.ELEVENLABS_VOICE_ID,
+  },
 });

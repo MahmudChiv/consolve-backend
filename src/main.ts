@@ -1,6 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { WsAdapter } from '@nestjs/platform-ws';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const cookieParser = require('cookie-parser');
 import { AppModule } from './app.module';
@@ -12,6 +13,9 @@ async function bootstrap() {
 
   // ── Cookie parser ──────────────────────────────────────────────────────────
   app.use(cookieParser());
+
+  // ── WebSocket adapter (raw ws, not socket.io) ─────────────────────────────
+  app.useWebSocketAdapter(new WsAdapter(app));
 
   // ── Global validation pipe ─────────────────────────────────────────────────
   app.useGlobalPipes(
@@ -40,6 +44,7 @@ async function bootstrap() {
     .addCookieAuth('refresh_token')
     .addTag('Auth', 'Authentication endpoints')
     .addTag('User', 'User profile endpoints')
+    .addTag('Onboarding', 'AI-driven onboarding — chat & voice')
     .addTag('Health', 'Health check endpoint')
     .build();
 
