@@ -1,14 +1,15 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 
 /**
  * PrismaService
  *
- * Wraps the Prisma v5 ORM client and manages the database connection lifecycle.
+ * Wraps the Prisma v7 ORM client and manages the database connection lifecycle.
  *
- * In Prisma v5, the PrismaClient constructor reads DATABASE_URL automatically
- * from the environment (via the `datasource.url = env("DATABASE_URL")` in
- * schema.prisma). No driver adapter or manual connection string wiring needed.
+ * In Prisma v7, the database connection is managed via a driver adapter.
+ * We instantiate a pg.Pool and wrap it in a PrismaPg adapter to pass to PrismaClient.
  *
  * Decorated with @Injectable() so NestJS DI can inject it everywhere.
  * The PrismaModule marks it @Global(), so this is only provided once.
@@ -19,15 +20,24 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(PrismaService.name);
+  private readonly pool: Pool;
 
   constructor() {
+    const pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+    });
+    const adapter = new PrismaPg(pool);
+
     super({
+      adapter,
       log: [
         { emit: 'event', level: 'query' },
         { emit: 'stdout', level: 'error' },
         { emit: 'stdout', level: 'warn' },
       ],
     });
+
+    this.pool = pool;
   }
 
   /**
@@ -45,6 +55,7 @@ export class PrismaService
    */
   async onModuleDestroy(): Promise<void> {
     await this.$disconnect();
+    await this.pool.end();
     this.logger.log('Database connection closed');
   }
 }

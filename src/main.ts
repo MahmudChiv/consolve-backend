@@ -45,6 +45,7 @@ async function bootstrap() {
     .addTag('Auth', 'Authentication endpoints')
     .addTag('User', 'User profile endpoints')
     .addTag('Onboarding', 'AI-driven onboarding — chat & voice')
+    .addTag('Search', 'AI-powered provider search and matchmaking')
     .addTag('Health', 'Health check endpoint')
     .build();
 

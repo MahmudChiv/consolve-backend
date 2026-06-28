@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
@@ -48,5 +49,23 @@ export class UserController {
   ) {
     const profiles = await this.userService.createProfile(user.sub, dto);
     return { message: 'Profile(s) created successfully', data: profiles };
+  }
+
+  @Get('profile')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Get all profiles for the authenticated user',
+    description:
+      'Returns all UserProfile records for the current user. ' +
+      'Use the returned `id` field as `profileId` for onboarding and search endpoints.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of user profiles',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getProfiles(@CurrentUser() user: JwtPayload) {
+    const profiles = await this.userService.getProfiles(user.sub);
+    return { message: 'Profiles retrieved', data: profiles };
   }
 }

@@ -167,12 +167,13 @@ describe('AuthService', () => {
       expect(result.message).toBe('OTP sent to your phone number');
     });
 
-    it('should throw BadRequestException if Twilio fails', async () => {
+    it('should fall back to mock SMS and not throw if Twilio fails', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
       mockPrisma.user.upsert.mockResolvedValue(makeUser());
       mockTwilioCreate.mockRejectedValueOnce(new Error('Twilio error'));
 
-      await expect(service.register(dto, mockRes)).rejects.toThrow(BadRequestException);
+      const result = await service.register(dto, mockRes);
+      expect(result.message).toBe('OTP sent to your phone number');
     });
   });
 

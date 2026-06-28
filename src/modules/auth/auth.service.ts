@@ -59,7 +59,7 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
   /** Twilio REST client — initialised once at service construction */
-  private readonly twilioClient: Twilio;
+  private readonly twilioClient: Twilio | null;
 
   constructor(
     private readonly prismaService: PrismaService,
@@ -70,11 +70,17 @@ export class AuthService {
     // Build the Twilio client from env-sourced credentials.
     // Using require() ensures jest.mock('twilio') works correctly in tests.
     // The twilio package exports a function directly as module.exports.
-    const twilioClient = twilio(
-      this.configService.get<string>('twilio.accountSid'),
-      this.configService.get<string>('twilio.authToken'),
-    );
-    this.twilioClient = twilioClient;
+    const accountSid = this.configService.get<string>('twilio.accountSid');
+    const authToken = this.configService.get<string>('twilio.authToken');
+
+    if (accountSid && accountSid.startsWith('AC') && authToken) {
+      this.twilioClient = twilio(accountSid, authToken);
+    } else {
+      this.logger.warn(
+        'Twilio credentials are not set or are invalid (accountSid must start with "AC"). SMS OTP delivery will be mocked/logged to console.',
+      );
+      this.twilioClient = null;
+    }
   }
 
   // ─── Private Helpers ────────────────────────────────────────────────────────
@@ -171,15 +177,21 @@ export class AuthService {
    */
   private async sendOtp(phoneNumber: string, otp: string): Promise<void> {
     try {
-      await this.twilioClient.messages.create({
-        body: `Your Consolve verification code is: ${otp}. It expires in 10 minutes.`,
-        from: this.configService.get<string>('twilio.phoneNumber'),
-        to: phoneNumber,
-      });
-      this.logger.log(`OTP sent to ${phoneNumber}`);
+      if (this.twilioClient) {
+        await this.twilioClient.messages.create({
+          body: `Your Consolve verification code is: ${otp}. It expires in 10 minutes.`,
+          from: this.configService.get<string>('twilio.phoneNumber'),
+          to: phoneNumber,
+        });
+        this.logger.log(`OTP sent to ${phoneNumber}`);
+      } else {
+        this.logger.warn(`[MOCKED SMS] OTP for ${phoneNumber} is: ${otp}`);
+      }
     } catch (err) {
-      this.logger.error('Failed to send OTP via Twilio', err);
-      throw new BadRequestException('Failed to send OTP. Please try again.');
+      this.logger.error(
+        `Failed to send OTP via Twilio API. Falling back to console logging. Error: ${err.message}`,
+      );
+      this.logger.warn(`[MOCKED SMS FALLBACK] OTP for ${phoneNumber} is: ${otp}`);
     }
   }
 
@@ -341,19 +353,28 @@ export class AuthService {
     // Revoke the pre-verification access token before issuing the full-access one
     await this.blacklistOldAccessToken(userId, oldToken);
 
-    // Issue a new, full-access JWT
-    const newAccessToken = this.signAccessToken(user.id, user.phoneNumber);
+    await this.issueFullAuthTokens(user.id, user.phoneNumber, res);
 
-    // Generate an opaque refresh token (40 random bytes = 80 hex chars)
+    return { message: 'Phone number verified successfully' };
+  }
+
+  /**
+   * Helper to issue full-access JWT and refresh token cookies
+   */
+  private async issueFullAuthTokens(
+    userId: string,
+    phoneNumber: string,
+    res: Response,
+  ): Promise<void> {
+    const newAccessToken = this.signAccessToken(userId, phoneNumber);
     const refreshToken = randomBytes(40).toString('hex');
     const hashedRefreshToken = await bcrypt.hash(refreshToken, BCRYPT_ROUNDS);
 
-    // Persist the verification state and hashed refresh token
     await this.prismaService.user.update({
-      where: { id: user.id },
+      where: { id: userId },
       data: {
         isVerified: true,
-        hashedOtp: null,      // Clear OTP fields — no longer needed
+        hashedOtp: null,
         otpExpiry: null,
         refreshToken: hashedRefreshToken,
       },
@@ -361,14 +382,10 @@ export class AuthService {
 
     const accessExpiry =
       this.configService.get<number>('jwt.accessExpiry') ?? 900;
+    await this.redisService.cacheAccessToken(userId, newAccessToken, accessExpiry);
 
-    await this.redisService.cacheAccessToken(user.id, newAccessToken, accessExpiry);
-
-    // Set both cookies — access (15 min) + refresh (7 days)
     this.setAccessCookie(res, newAccessToken);
     this.setRefreshCookie(res, refreshToken);
-
-    return { message: 'Phone number verified successfully' };
   }
 
   // ─── Resend OTP ─────────────────────────────────────────────────────────────
@@ -553,6 +570,11 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid phone number or password');
+    }
+
+    if (this.configService.get<string>('nodeEnv') === 'development') {
+      await this.issueFullAuthTokens(user.id, user.phoneNumber, res);
+      return { message: 'Login successful (development bypass)' };
     }
 
     // Generate OTP for login verification

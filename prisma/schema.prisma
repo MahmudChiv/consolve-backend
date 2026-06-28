@@ -6,7 +6,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum Gender {
@@ -68,12 +67,16 @@ model Identity {
   userProfileId String      @unique
   profession    String?
   summary       String?
-  expertise     String?
-  experience    String?
-  availability  String?
-  pricing       String?
-  latitude      String?
-  longitude     String?
+  /// Array of specialties/skills (e.g. ["senator wear", "agbada", "ankara"])
+  expertise     String[]    @default([])
+  /// Years of experience as an integer
+  experience    Int?
+  /// Availability schedule as JSON { type: "full-time"|"part-time", days?: string }
+  availability  Json?
+  /// Pricing as JSON { min: number, max: number, currency: "NGN", unit: string, raw: string }
+  pricing       Json?
+  latitude      Float?
+  longitude     Float?
   city          String?
   state         String?
   country       String?
@@ -85,4 +88,7 @@ model Identity {
 
   @@index([userId])
   @@index([userProfileId])
+  @@index([profession])
+  @@index([city, state])
+  @@index([deletedAt])
 }
