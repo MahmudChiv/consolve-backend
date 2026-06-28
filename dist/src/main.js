@@ -42,9 +42,9 @@ async function bootstrap() {
         },
     });
     const port = process.env.PORT ?? 3000;
-    await app.listen(port);
-    console.log(`🚀 Consolve API running on: http://localhost:${port}/api/v1`);
-    console.log(`📚 Swagger docs at: http://localhost:${port}/api/docs`);
+    await app.listen(port, '0.0.0.0');
+    console.log(`🚀 Consolve API running on: http://0.0.0.0:${port}/api/v1`);
+    console.log(`📚 Swagger docs at: http://0.0.0.0:${port}/api/docs`);
 }
 bootstrap();
 //# sourceMappingURL=main.js.map
