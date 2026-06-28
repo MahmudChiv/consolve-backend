@@ -12,8 +12,8 @@ export const validationSchema = Joi.object({
   DATABASE_URL: Joi.string().required(),
 
   // ── JWT ───────────────────────────────────────────────────────────────────
-  JWT_ACCESS_SECRET: Joi.string().min(32).required(),
-  JWT_REFRESH_SECRET: Joi.string().min(32).required(),
+  JWT_ACCESS_SECRET: Joi.string().min(8).required(),
+  JWT_REFRESH_SECRET: Joi.string().min(8).required(),
   JWT_ACCESS_EXPIRY: Joi.number().default(900),
   JWT_REFRESH_EXPIRY: Joi.number().default(604800),
 
