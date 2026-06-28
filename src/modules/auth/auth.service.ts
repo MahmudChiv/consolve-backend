@@ -353,19 +353,28 @@ export class AuthService {
     // Revoke the pre-verification access token before issuing the full-access one
     await this.blacklistOldAccessToken(userId, oldToken);
 
-    // Issue a new, full-access JWT
-    const newAccessToken = this.signAccessToken(user.id, user.phoneNumber);
+    await this.issueFullAuthTokens(user.id, user.phoneNumber, res);
 
-    // Generate an opaque refresh token (40 random bytes = 80 hex chars)
+    return { message: 'Phone number verified successfully' };
+  }
+
+  /**
+   * Helper to issue full-access JWT and refresh token cookies
+   */
+  private async issueFullAuthTokens(
+    userId: string,
+    phoneNumber: string,
+    res: Response,
+  ): Promise<void> {
+    const newAccessToken = this.signAccessToken(userId, phoneNumber);
     const refreshToken = randomBytes(40).toString('hex');
     const hashedRefreshToken = await bcrypt.hash(refreshToken, BCRYPT_ROUNDS);
 
-    // Persist the verification state and hashed refresh token
     await this.prismaService.user.update({
-      where: { id: user.id },
+      where: { id: userId },
       data: {
         isVerified: true,
-        hashedOtp: null,      // Clear OTP fields — no longer needed
+        hashedOtp: null,
         otpExpiry: null,
         refreshToken: hashedRefreshToken,
       },
@@ -373,14 +382,10 @@ export class AuthService {
 
     const accessExpiry =
       this.configService.get<number>('jwt.accessExpiry') ?? 900;
+    await this.redisService.cacheAccessToken(userId, newAccessToken, accessExpiry);
 
-    await this.redisService.cacheAccessToken(user.id, newAccessToken, accessExpiry);
-
-    // Set both cookies — access (15 min) + refresh (7 days)
     this.setAccessCookie(res, newAccessToken);
     this.setRefreshCookie(res, refreshToken);
-
-    return { message: 'Phone number verified successfully' };
   }
 
   // ─── Resend OTP ─────────────────────────────────────────────────────────────
@@ -565,6 +570,11 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid phone number or password');
+    }
+
+    if (this.configService.get<string>('nodeEnv') === 'development') {
+      await this.issueFullAuthTokens(user.id, user.phoneNumber, res);
+      return { message: 'Login successful (development bypass)' };
     }
 
     // Generate OTP for login verification
