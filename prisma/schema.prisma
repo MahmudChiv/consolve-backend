@@ -25,6 +25,20 @@ enum OnboardingStatus {
   COMPLETED
 }
 
+enum BookingStatus {
+  PENDING
+  ACCEPTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+enum BookingType {
+  HIRE_NOW
+  SCHEDULED
+}
+
 model User {
   id             String        @id @default(uuid())
   phoneNumber    String        @unique
@@ -43,18 +57,22 @@ model User {
 }
 
 model UserProfile {
-  id               String           @id @default(uuid())
-  userId           String
-  firstName        String
-  lastName         String
-  gender           Gender
-  type             UserType
-  avatarUrl        String?
-  onboardingStatus OnboardingStatus @default(PENDING)
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  user             User             @relation(fields: [userId], references: [id])
-  identity         Identity?
+  id                 String           @id @default(uuid())
+  userId             String
+  firstName          String
+  lastName           String
+  gender             Gender
+  type               UserType
+  avatarUrl          String?
+  onboardingStatus   OnboardingStatus @default(PENDING)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  user               User             @relation(fields: [userId], references: [id])
+  identity           Identity?
+  bookingsAsCustomer Booking[]        @relation("CustomerProfile")
+  bookingsAsProvider Booking[]        @relation("ProviderProfile")
+  reviewsGiven       Review[]         @relation("ReviewerProfile")
+  reviewsReceived    Review[]         @relation("ProviderReviews")
 
   @@unique([userId, type])
   @@index([userId])
@@ -67,13 +85,13 @@ model Identity {
   userProfileId String      @unique
   profession    String?
   summary       String?
-  /// Array of specialties/skills (e.g. ["senator wear", "agbada", "ankara"])
+  /// Array of specialties/skills
   expertise     String[]    @default([])
   /// Years of experience as an integer
   experience    Int?
-  /// Availability schedule as JSON { type: "full-time"|"part-time", days?: string }
+  /// Availability schedule as JSON
   availability  Json?
-  /// Pricing as JSON { min: number, max: number, currency: "NGN", unit: string, raw: string }
+  /// Pricing as JSON
   pricing       Json?
   latitude      Float?
   longitude     Float?
@@ -91,4 +109,62 @@ model Identity {
   @@index([profession])
   @@index([city, state])
   @@index([deletedAt])
+}
+
+model Booking {
+  id                 String        @id @default(uuid())
+  customerId         String
+  customerProfileId  String
+  providerId         String
+  providerProfileId  String
+  serviceType        String
+  description        String?
+  status             BookingStatus @default(PENDING)
+  bookingType        BookingType   @default(HIRE_NOW)
+  scheduledAt        DateTime?
+  priceAgreed        Decimal?      @db.Decimal(12, 2)
+  currency           String        @default("NGN")
+  locationAddress    String?
+  latitude           Float?
+  longitude          Float?
+  notes              String?
+  disputeReason      String?
+  disputeDescription String?
+  completedAt        DateTime?
+  cancelledAt        DateTime?
+  cancelReason       String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  customerProfile UserProfile @relation("CustomerProfile", fields: [customerProfileId], references: [id])
+  providerProfile UserProfile @relation("ProviderProfile", fields: [providerProfileId], references: [id])
+  review          Review?
+
+  @@index([customerId])
+  @@index([providerId])
+  @@index([customerProfileId])
+  @@index([providerProfileId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("bookings")
+}
+
+model Review {
+  id                String      @id @default(uuid())
+  bookingId         String      @unique
+  reviewerId        String
+  reviewerProfileId String
+  providerId        String
+  providerProfileId String
+  rating            Int
+  comment           String?
+  createdAt         DateTime    @default(now())
+
+  booking         Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  reviewerProfile UserProfile @relation("ReviewerProfile", fields: [reviewerProfileId], references: [id])
+  providerProfile UserProfile @relation("ProviderReviews", fields: [providerProfileId], references: [id])
+
+  @@index([providerId])
+  @@index([providerProfileId])
+  @@map("reviews")
 }
