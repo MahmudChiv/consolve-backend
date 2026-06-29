@@ -43,4 +43,11 @@ export const validationSchema = Joi.object({
   SMTP_USER: Joi.string().optional(),
   SMTP_PASS: Joi.string().optional(),
   SMTP_FROM: Joi.string().default('Consolve <no-reply@consolve.dev>'),
+
+  // ── CORS ──────────────────────────────────────────────────────────────────
+  /** Comma-separated list of allowed origins (e.g. Vercel URL + localhost) */
+  ALLOWED_ORIGINS: Joi.string().optional(),
+
+  // ── Google OAuth ──────────────────────────────────────────────────────────
+  GOOGLE_CLIENT_ID: Joi.string().optional(),
 });

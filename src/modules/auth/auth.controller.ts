@@ -30,6 +30,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiBody,
   ApiCookieAuth,
   ApiOperation,
   ApiResponse,
@@ -47,12 +48,17 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { GoogleAuthDto } from './dto/google-auth.dto';
+import { JwtService } from '@nestjs/jwt';
 
 @ApiTags('Auth')
 @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 req/min per IP
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly jwtService: JwtService,
+  ) {}
 
   /**
    * POST /auth/register
@@ -179,9 +185,7 @@ export class AuthController {
       } else {
         // Access token has expired — decode without verification to get sub
         // (The refresh token itself will be validated by AuthService)
-        const { JwtService } = await import('@nestjs/jwt');
-        const jwtService = new JwtService({});
-        const decoded = jwtService.decode(oldAccessToken ?? '') as JwtPayload;
+        const decoded = this.jwtService.decode(oldAccessToken ?? '') as JwtPayload;
         userId = decoded?.sub;
       }
     } catch {
@@ -212,6 +216,63 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     return this.authService.login(dto, res);
+  }
+
+  /**
+   * POST /auth/google
+   *
+   * Stateless Google Sign-In using an ID token from the frontend SDK.
+   * - Throttled to 10 requests/min (higher than default 5) to avoid blocking
+   *   legitimate users during repeated sign-in attempts.
+   * - No JWT guard — this IS the authentication entry point.
+   * - On success: access + refresh token cookies are set identically to /login.
+   */
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Sign in or register with Google',
+    description:
+      'Verifies a Google ID token from the frontend SDK. Creates a new account or links to an existing one. ' +
+      'Returns JWT tokens in cookies. If new user, requiresProfile will be true.',
+  })
+  @ApiBody({ type: GoogleAuthDto })
+  @ApiResponse({ status: 200, description: 'Google authentication successful' })
+  @ApiResponse({ status: 401, description: 'Invalid Google token' })
+  async googleSignIn(
+    @Body() dto: GoogleAuthDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.googleSignIn(dto.idToken);
+
+    // Set cookies exactly as the login endpoint does
+    const isProd = process.env.NODE_ENV === 'production';
+    const cookieOpts = {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: 'strict' as const,
+    };
+    res.cookie('access_token', result.accessToken, {
+      ...cookieOpts,
+      maxAge: 900 * 1000, // 15 min
+    });
+    res.cookie('refresh_token', result.refreshToken, {
+      ...cookieOpts,
+      maxAge: 604800 * 1000, // 7 days
+    });
+
+    return {
+      success: true,
+      message: result.isNewUser
+        ? 'Account created with Google'
+        : 'Google sign in successful',
+      data: {
+        user: result.user,
+        requiresProfile: result.requiresProfile,
+        requiresOnboarding: result.requiresOnboarding,
+      },
+      timestamp: new Date().toISOString(),
+    };
   }
 
   /**

@@ -10,12 +10,14 @@
  *  - OnboardingSessionService (Redis session store)
  */
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
 import { OnboardingController } from './onboarding.controller';
 import { OnboardingGateway } from './onboarding.gateway';
 import { OnboardingService } from './onboarding.service';
 import { OnboardingSessionService } from './session/onboarding-session.service';
 
 @Module({
+  imports: [AuthModule],
   controllers: [OnboardingController],
   providers: [
     OnboardingService,

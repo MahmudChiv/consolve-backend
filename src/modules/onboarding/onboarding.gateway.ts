@@ -34,6 +34,7 @@ import { Logger } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
+  OnGatewayConnection,
   OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
@@ -41,11 +42,14 @@ import {
   WsException,
 } from '@nestjs/websockets';
 import { Server, WebSocket } from 'ws';
+import { IncomingMessage } from 'http';
 import { DeepgramClient, ListenV1SmartFormat, ListenV1InterimResults, ListenV1VadEvents } from '@deepgram/sdk';
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { OnboardingService } from './onboarding.service';
 import { OnboardingSessionService } from './session/onboarding-session.service';
+import { RedisService } from '../common/redis/redis.service';
 
 interface JoinPayload {
   userProfileId: string;
@@ -65,7 +69,7 @@ interface SocketContext {
   path: '/ws/onboarding',
   cors: { origin: '*', credentials: true },
 })
-export class OnboardingGateway implements OnGatewayDisconnect {
+export class OnboardingGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: Server;
 
@@ -76,9 +80,47 @@ export class OnboardingGateway implements OnGatewayDisconnect {
     private readonly onboardingService: OnboardingService,
     private readonly sessionService: OnboardingSessionService,
     private readonly configService: ConfigService,
+    private readonly jwtService: JwtService,
+    private readonly redisService: RedisService,
   ) {}
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
+
+  /**
+   * Authenticate the WebSocket connection before any messages are processed.
+   * Reads the `access_token` cookie, checks the Redis blacklist, and
+   * verifies the JWT. Closes with code 1008 (Policy Violation) if auth fails.
+   */
+  async handleConnection(client: WebSocket, req: IncomingMessage): Promise<void> {
+    try {
+      const cookieHeader = req.headers.cookie ?? '';
+      const cookies = Object.fromEntries(
+        cookieHeader
+          .split(';')
+          .map(c => c.trim().split('=').map(decodeURIComponent)),
+      );
+      const token = cookies['access_token'];
+
+      if (!token) {
+        client.close(1008, 'Unauthorized - no token');
+        return;
+      }
+
+      const isBlacklisted = await this.redisService.isBlacklisted(token);
+      if (isBlacklisted) {
+        client.close(1008, 'Unauthorized - token blacklisted');
+        return;
+      }
+
+      const payload = this.jwtService.verify(token, {
+        secret: this.configService.get<string>('jwt.accessSecret'),
+      });
+      (client as any).userId = payload.sub;
+      this.logger.log(`Voice client connected: userId=${payload.sub}`);
+    } catch {
+      client.close(1008, 'Unauthorized - invalid token');
+    }
+  }
 
   handleDisconnect(client: WebSocket): void {
     const ctx = this.socketContextMap.get(client);

@@ -42,11 +42,17 @@ enum BookingType {
 model User {
   id             String        @id @default(uuid())
   email          String        @unique
-  hashedPassword String
+  hashedPassword String?
   hashedOtp      String?
   otpExpiry      DateTime?
   refreshToken   String?
   isVerified     Boolean       @default(false)
+  googleId       String?       @unique @map("google_id")
+  avatarUrl      String?       @map("avatar_url")
+  isGoogleUser   Boolean       @default(false) @map("is_google_user")
+  firstName      String?
+  lastName       String?
+  lastLogin      DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   deletedAt      DateTime?
@@ -186,18 +192,29 @@ enum NotificationType {
 }
 
 model TrustScore {
-  id                String      @id @default(uuid())
-  userProfileId     String      @unique
-  overallScore      Int         @default(0)
-  completionRate    Float       @default(0)
-  communityScore    Float       @default(0)
-  paymentReliability Float       @default(70)
-  responseTimeScore  Float       @default(70)
-  profileCompleteness Float     @default(0)
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  id                  String      @id @default(uuid())
+  userId              String
+  userProfileId       String      @unique
+  overallScore        Float       @default(0)
+  completionRate      Float       @default(0)
+  communityScore      Float       @default(0)
+  paymentReliability  Float       @default(70)
+  responseTimeScore   Float       @default(70)
+  profileCompleteness Float       @default(0)
+  disputePenalty      Float       @default(0)
+  totalJobs           Int         @default(0)
+  completedJobs       Int         @default(0)
+  totalReviews        Int         @default(0)
+  totalVouches        Int         @default(0)
+  lastCalculated      DateTime    @default(now())
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
-  userProfile       UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  userProfile         UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userProfileId])
+  @@index([overallScore])
+  @@map("trust_scores")
 }
 
 model Vouch {
@@ -224,13 +241,13 @@ model Notification {
   type              NotificationType
   title             String
   message           String
-  data              Json?
+  data              Json             @default("{}")
   isRead            Boolean          @default(false)
   createdAt         DateTime         @default(now())
 
   userProfile       UserProfile      @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
+  @@index([userId, isRead])
   @@index([userProfileId])
-  @@index([isRead])
   @@map("notifications")
 }

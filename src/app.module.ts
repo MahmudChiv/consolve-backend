@@ -14,6 +14,8 @@ import { HealthModule } from './modules/health/health.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { SearchModule } from './modules/search/search.module';
 import { BookingModule } from './modules/booking/booking.module';
+import { TrustModule } from './modules/trust/trust.module';
+import { NotificationModule } from './modules/notification/notification.module';
 
 @Module({
   imports: [
@@ -36,6 +38,8 @@ import { BookingModule } from './modules/booking/booking.module';
     OnboardingModule,
     SearchModule,
     BookingModule,
+    TrustModule,
+    NotificationModule,
   ],
 })
 export class AppModule implements NestModule {

@@ -9,6 +9,8 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { TokenBlacklistGuard } from '../common/guards/token-blacklist.guard';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
+import { JwtService } from '@nestjs/jwt';
+
 const mockAuthService = {
   register: jest.fn(),
   verifyOtp: jest.fn(),
@@ -18,6 +20,12 @@ const mockAuthService = {
   logout: jest.fn(),
   forgotPassword: jest.fn(),
   resetPassword: jest.fn(),
+};
+
+const mockJwtService = {
+  decode: jest.fn(),
+  verify: jest.fn(),
+  sign: jest.fn(),
 };
 
 const mockRes = {
@@ -38,7 +46,10 @@ describe('AuthController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
-      providers: [{ provide: AuthService, useValue: mockAuthService }],
+      providers: [
+        { provide: AuthService, useValue: mockAuthService },
+        { provide: JwtService, useValue: mockJwtService },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: jest.fn().mockReturnValue(true) })

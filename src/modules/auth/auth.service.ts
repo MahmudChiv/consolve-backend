@@ -39,7 +39,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import * as bcrypt from 'bcrypt';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomInt } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { MailService } from '../common/mail/mail.service';
@@ -49,6 +49,7 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Response } from 'express';
+import { OAuth2Client } from 'google-auth-library';
 
 /** bcrypt cost factor — 12 rounds is the OWASP-recommended minimum for passwords */
 const BCRYPT_ROUNDS = 12;
@@ -68,12 +69,12 @@ export class AuthService {
   // ─── Private Helpers ────────────────────────────────────────────────────────
 
   /**
-   * Generate a cryptographically random 6-digit OTP string.
-   * Math.random() is used here intentionally — the OTP is a
-   * one-time code, not a secret key, so a CSPRNG is not required.
+   * Generate a cryptographically secure 6-digit OTP string.
+   * Uses Node's built-in `randomInt` (CSPRNG) to prevent
+   * predictability attacks on OTP values.
    */
   private generateOtp(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return String(randomInt(100000, 999999));
   }
 
   /**
@@ -252,7 +253,7 @@ export class AuthService {
     await this.sendEmailOtp(email, otp);
 
     // Issue an access token so the client can hit /verifyOtp and /resendOtp
-    const accessToken = this.signAccessToken(user.id, user.email);
+    const accessToken = this.signAccessToken(user.id, user.email ?? '');
     const accessExpiry =
       this.configService.get<number>('jwt.accessExpiry') ?? 900;
 
@@ -434,7 +435,7 @@ export class AuthService {
     await this.blacklistOldAccessToken(userId, oldAccessToken);
 
     // Rotate both tokens
-    const newAccessToken = this.signAccessToken(user.id, user.email);
+    const newAccessToken = this.signAccessToken(user.id, user.email ?? '');
     const newRefreshToken = randomBytes(40).toString('hex');
     const hashedRefreshToken = await bcrypt.hash(newRefreshToken, BCRYPT_ROUNDS);
 
@@ -525,6 +526,10 @@ export class AuthService {
       );
     }
 
+    if (!user.hashedPassword) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
     // Constant-time bcrypt comparison — prevents timing attacks
     const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
     if (!isPasswordValid) {
@@ -610,7 +615,7 @@ export class AuthService {
     await this.sendEmailOtp(dto.email, otp);
 
     // Issue a temporary access token so the client can authenticate /resetPassword
-    const accessToken = this.signAccessToken(user.id, user.email);
+    const accessToken = this.signAccessToken(user.id, user.email ?? '');
     const accessExpiry =
       this.configService.get<number>('jwt.accessExpiry') ?? 900;
 
@@ -681,5 +686,130 @@ export class AuthService {
 
     this.logger.log(`Password reset for user ${userId}`);
     return { message: 'Password reset successfully. Please log in again.' };
+  }
+
+  // ─── Google Sign-In ───────────────────────────────────────────────────────────────
+
+  /**
+   * POST /auth/google
+   *
+   * Frontend-flow Google Sign-In:
+   *  1. Frontend completes OAuth using Google SDK and receives an ID token
+   *  2. Frontend POSTs { idToken } to this endpoint
+   *  3. Backend verifies the token with Google, extracts profile data
+   *  4. Finds or creates user:
+   *     a. New user → create with isVerified=true (Google already verified email)
+   *     b. Exists by googleId → update avatarUrl + lastLogin
+   *     c. Exists by email only → link Google account (set googleId, avatarUrl)
+   *  5. Issue access + refresh tokens identical to email flow
+   *  6. Return { user, requiresProfile, requiresOnboarding, isNewUser }
+   */
+  async googleSignIn(idToken: string): Promise<{
+    user: Record<string, unknown>;
+    accessToken: string;
+    refreshToken: string;
+    requiresProfile: boolean;
+    requiresOnboarding: boolean;
+    isNewUser: boolean;
+  }> {
+    // 1. Verify Google ID token
+    const googleClientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
+    if (!googleClientId) {
+      throw new UnauthorizedException('Google Sign-In is not configured');
+    }
+    const client = new OAuth2Client(googleClientId);
+    let googlePayload: any;
+    try {
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: googleClientId,
+      });
+      googlePayload = ticket.getPayload();
+    } catch {
+      throw new UnauthorizedException('Invalid Google token');
+    }
+    if (!googlePayload) {
+      throw new UnauthorizedException('Invalid Google token');
+    }
+
+    const { email, name, picture, sub: googleId } = googlePayload;
+
+    // 2. Find or create user
+    let user = await this.prismaService.user.findFirst({
+      where: { OR: [{ googleId }, { email }] },
+    });
+
+    if (!user) {
+      // Case a: Brand new user — create with Google data, no password needed
+      user = await this.prismaService.user.create({
+        data: {
+          email,
+          googleId,
+          avatarUrl: picture,
+          isVerified: true,
+          isGoogleUser: true,
+          firstName: name?.split(' ')[0] ?? null,
+          lastName: name?.split(' ').slice(1).join(' ') || null,
+        },
+      });
+      this.logger.log(`New Google user created: ${email}`);
+    } else {
+      // Case b/c: Existing user — link Google account or update avatarUrl
+      user = await this.prismaService.user.update({
+        where: { id: user.id },
+        data: {
+          googleId: user.googleId ?? googleId,
+          avatarUrl: picture,
+          isVerified: true,
+          lastLogin: new Date(),
+        },
+      });
+      this.logger.log(`Google sign-in for existing user: ${email}`);
+    }
+
+    // 3. Determine profile / onboarding status
+    const profiles = await this.prismaService.userProfile.findMany({
+      where: { userId: user.id },
+    });
+    const requiresProfile = profiles.length === 0;
+    const requiresOnboarding = profiles.some(
+      (p) => p.onboardingStatus !== 'COMPLETED',
+    );
+
+    // 4. Generate tokens (same helper used by email flow)
+    const accessToken = this.signAccessToken(user.id, user.email ?? '');
+    const refreshToken = randomBytes(40).toString('hex');
+    const hashedRefreshToken = await bcrypt.hash(refreshToken, BCRYPT_ROUNDS);
+
+    await this.prismaService.user.update({
+      where: { id: user.id },
+      data: { refreshToken: hashedRefreshToken },
+    });
+
+    const accessExpiry =
+      this.configService.get<number>('jwt.accessExpiry') ?? 900;
+    await this.redisService.cacheAccessToken(user.id, accessToken, accessExpiry);
+
+    return {
+      user: this.sanitizeUser(user),
+      accessToken,
+      refreshToken,
+      requiresProfile,
+      requiresOnboarding,
+      isNewUser: profiles.length === 0,
+    };
+  }
+
+  /**
+   * Strip sensitive fields before returning user data to the client.
+   */
+  private sanitizeUser(user: any): Record<string, unknown> {
+    const {
+      hashedPassword: _hp,
+      hashedOtp: _ho,
+      refreshToken: _rt,
+      ...safe
+    } = user;
+    return safe;
   }
 }
